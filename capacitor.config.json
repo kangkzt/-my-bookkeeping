@@ -1,0 +1,8 @@
+{
+    "appId": "com.scarlet.cosmos",
+    "appName": "scarlet-cosmos",
+    "webDir": "dist",
+    "server": {
+        "androidScheme": "https"
+    }
+}
