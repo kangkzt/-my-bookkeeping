@@ -2,10 +2,13 @@ import { useState, useEffect } from 'react'
 import { ChevronLeft, MoreHorizontal, ChevronRight, Plus, X, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { getDB } from '../db/database'
-import { getAllTransactions } from '../db/stores'
+import { getAllMerchantStats, getGlobalStats } from '../db/stores'
 
 // 默认商家图标
-const ICONS = ['🛒', '🍽️', '🏦', '🏬', '🏪', '🚌', '⛽', '🏥', '🎬', '✈️', '🏨', '📱', '💻', '🎮', '📚']
+const ICONS = [
+  '🛒', '🏪', '🏬', '🏦', '🍽️', '🚌', '⛽', '🏥', '🎬', '✈️',
+  '🏨', '📱', '💻', '🎮', '📚', '☕', '🍕', '🛍️', '🎁', '💼'
+]
 
 function Merchants() {
   const navigate = useNavigate()
@@ -46,38 +49,26 @@ function Merchants() {
 
       setMerchants(allMerchants)
 
-      // 获取交易统计
-      const allTrans = await getAllTransactions()
-      const stats = {}
-      let totalIncome = 0
-      let totalExpense = 0
+      setMerchants(allMerchants)
 
-      allTrans.forEach(t => {
-        const merchantName = t.merchant || '其他'
-        if (!stats[merchantName]) {
-          stats[merchantName] = { income: 0, expense: 0 }
-        }
-        const amount = Number(t.amount)
-        if (t.type === 'income') {
-          stats[merchantName].income += amount
-          totalIncome += amount
-        } else if (t.type === 'expense') {
-          stats[merchantName].expense += amount
-          totalExpense += amount
-        }
-      })
+      // 使用缓存的统计数据 (高性能)
+      // Use cached stats (High Performance)
+      const [globalStats, mStats] = await Promise.all([
+        getGlobalStats(),
+        getAllMerchantStats()
+      ])
 
-      setMerchantStats(stats)
+      setMerchantStats(mStats)
       setTotalStats({
-        income: totalIncome,
-        expense: totalExpense,
-        balance: totalIncome - totalExpense
+        income: globalStats.income,
+        expense: globalStats.expense,
+        balance: globalStats.income - globalStats.expense
       })
 
       // 按结余绝对值排序
       const sortedMerchants = allMerchants.sort((a, b) => {
-        const balanceA = Math.abs((stats[a.name]?.income || 0) - (stats[a.name]?.expense || 0))
-        const balanceB = Math.abs((stats[b.name]?.income || 0) - (stats[b.name]?.expense || 0))
+        const balanceA = Math.abs((mStats[a.name]?.income || 0) - (mStats[a.name]?.expense || 0))
+        const balanceB = Math.abs((mStats[b.name]?.income || 0) - (mStats[b.name]?.expense || 0))
         return balanceB - balanceA
       })
       setMerchants(sortedMerchants)

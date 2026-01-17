@@ -13,11 +13,11 @@ import { secureStorage } from '../utils/secureStorage'
 import { logger } from '../utils/logger'
 
 // 设备 ID (用于区分多设备同步)
-const getDeviceId = () => {
-    let deviceId = secureStorage.get('device_id')
+const getDeviceId = async () => {
+    let deviceId = await secureStorage.get('device_id')
     if (!deviceId) {
         deviceId = `device_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-        secureStorage.set('device_id', deviceId)
+        await secureStorage.set('device_id', deviceId)
     }
     return deviceId
 }
@@ -48,12 +48,12 @@ export const SyncService = {
     /**
      * 获取当前同步状态
      */
-    getStatus: () => {
+    getStatus: async () => {
         return {
             configured: isSupabaseConfigured(),
-            lastSyncAt: secureStorage.get('last_sync_at'),
-            lastPullAt: secureStorage.get('last_pulled_at'),
-            deviceId: getDeviceId()
+            lastSyncAt: await secureStorage.get('last_sync_at'),
+            lastPullAt: await secureStorage.get('last_pulled_at'),
+            deviceId: await getDeviceId()
         }
     },
 
@@ -88,7 +88,7 @@ export const SyncService = {
 
             // 更新同步时间
             const now = new Date().toISOString()
-            secureStorage.set('last_sync_at', now)
+            await secureStorage.set('last_sync_at', now)
 
             logger.log('[Sync] Sync completed.')
             onProgress({ phase: 'done', progress: 100 })
@@ -110,7 +110,7 @@ export const SyncService = {
      */
     push: async (userId, onProgress = () => { }) => {
         const db = getDB()
-        const deviceId = getDeviceId()
+        const deviceId = await getDeviceId()
         let totalPushed = 0
 
         for (let i = 0; i < TABLES.length; i++) {
@@ -226,9 +226,9 @@ export const SyncService = {
      * 拉取云端变更到本地
      */
     pull: async (userId, onProgress = () => { }) => {
-        const lastPulledAt = secureStorage.get('last_pulled_at') || '1970-01-01T00:00:00.000Z'
+        const lastPulledAt = (await secureStorage.get('last_pulled_at')) || '1970-01-01T00:00:00.000Z'
         const now = new Date().toISOString()
-        const deviceId = getDeviceId()
+        const deviceId = await getDeviceId()
         let totalPulled = 0
 
         for (let i = 0; i < TABLES.length; i++) {
@@ -318,7 +318,7 @@ export const SyncService = {
         }
 
         // 更新拉取时间
-        secureStorage.set('last_pulled_at', now)
+        await secureStorage.set('last_pulled_at', now)
 
         return { count: totalPulled }
     },

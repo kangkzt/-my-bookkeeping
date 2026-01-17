@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ChevronLeft, Calendar, CheckSquare, Search, Plus, Filter,
@@ -11,6 +11,130 @@ import {
 } from '../db/stores'
 import { useSwipeable } from 'react-swipeable'
 import DatePickerModal from '../components/DatePickerModal'
+
+// Separated Component for Performance (Lazy Load Photos)
+const RecordItem = ({ trans, category, account, person, isSelected, isSelectionMode, isSwiped, setSwipedItemId, toggleSelection, handleDelete, handleEdit, setGallery, formatAmount }) => {
+  const [photos, setPhotos] = useState([])
+  const startX = useRef(null)
+  const startY = useRef(null)
+
+  useEffect(() => {
+    // Lazy load photos
+    let isMounted = true
+    getPhotosByTransactionId(trans.id).then(imgs => {
+      if (isMounted && imgs && imgs.length > 0) setPhotos(imgs)
+    })
+    return () => { isMounted = false }
+  }, [trans.id])
+
+  return (
+    <div
+      className={`record-item-wrapper ${isSwiped ? 'swiped' : ''}`}
+      onTouchStart={(e) => {
+        if (isSelectionMode) return
+        const touch = e.touches[0]
+        startX.current = touch.clientX
+        startY.current = touch.clientY
+      }}
+      onTouchMove={(e) => {
+        if (isSelectionMode || startX.current === null) return
+        const touch = e.touches[0]
+        const diffX = startX.current - touch.clientX
+        const diffY = Math.abs(startY.current - touch.clientY)
+
+        if (diffX > 50 && diffY < 30) {
+          setSwipedItemId(trans.id)
+        } else if (diffX < -50) {
+          setSwipedItemId(null)
+        }
+      }}
+    >
+      <div
+        className="record-item-bg"
+        onClick={() => handleDelete(trans.id)}
+      >
+        <span>删除</span>
+      </div>
+
+      <div
+        className={`record-item ${isSelectionMode && isSelected ? 'selected' : ''}`}
+        onClick={() => {
+          if (isSelectionMode) {
+            toggleSelection(trans.id)
+          } else if (isSwiped) {
+            setSwipedItemId(null)
+          } else {
+            handleEdit(trans.id)
+          }
+        }}
+        style={{
+          transform: isSwiped ? 'translateX(-80px)' : 'translateX(0)',
+          transition: 'transform 0.3s ease',
+          zIndex: 2,
+          background: '#fff'
+        }}
+      >
+        {isSelectionMode && (
+          <div className="selection-checkbox">
+            {isSelected ? <Check size={16} color="white" /> : null}
+          </div>
+        )}
+
+        <div className="category-icon" style={{ backgroundColor: '#fff' }}>
+          <span style={{ fontSize: '24px' }}>{category.icon}</span>
+        </div>
+
+        <div className="record-content">
+          <div className="record-main">
+            <span className="category-name" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {category.name}
+              {trans.subCategory && <span style={{ color: '#999', fontWeight: 400 }}> · {trans.subCategory}</span>}
+              <span className="meta-info-inline" style={{ fontSize: 11, color: '#bbb', fontWeight: 400, marginLeft: 2 }}>
+                {account?.name || '现金'} · {person?.name || '我'} · {trans.date.split('T')[1].slice(0, 5)}
+              </span>
+            </span>
+            <span className={`amount ${trans.type}`}>
+              {formatAmount(trans.amount)}
+            </span>
+          </div>
+          <div className="record-sub">
+            <div className="sub-left">
+              {trans.remark && <span className="remark" style={{ fontSize: 13, color: '#666', marginTop: 2, display: 'block' }}>{trans.remark}</span>}
+
+              {photos.length > 0 && (
+                <div className="record-photos" style={{ display: 'flex', gap: 4, margin: '4px 0', overflowX: 'auto' }}>
+                  {photos.map(p => (
+                    <img
+                      key={p.id}
+                      src={p.data}
+                      alt="img"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setGallery({
+                          isOpen: true,
+                          images: photos.map(p => p.data),
+                          index: photos.indexOf(p)
+                        });
+                      }}
+                      style={{
+                        width: 32,
+                        height: 32,
+                        objectFit: 'cover',
+                        borderRadius: 4,
+                        border: '1px solid #eee',
+                        cursor: 'zoom-in'
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function Records() {
   const navigate = useNavigate()
@@ -79,8 +203,8 @@ function Records() {
   // Swipe Delete State
   const [swipedItemId, setSwipedItemId] = useState(null)
 
-  // Collapse State
-  const [isCollapsed, setIsCollapsed] = useState(false)
+  // Image Preview State (Gallery Mode)
+  const [gallery, setGallery] = useState({ isOpen: false, images: [], index: 0 })
 
   const year = currentDate.getFullYear()
   const month = currentDate.getMonth() + 1
@@ -185,40 +309,64 @@ function Records() {
     }
   }
 
-  useEffect(() => {
-    loadData()
-  }, [range, searchParams])
+  // Metadata State
+  const [metaLoaded, setMetaLoaded] = useState(false)
 
-  const loadData = async () => {
+  // Initial Metadata Load
+  useEffect(() => {
+    const loadMeta = async () => {
+      try {
+        const [cats, ts, ps, accs, projs, mers] = await Promise.all([
+          getAllCategories(),
+          getAllTags(),
+          getAllPersons(),
+          getAllAccounts(),
+          getAllProjects(),
+          getAllMerchants()
+        ])
+        setCategories(cats)
+        setTags(ts)
+        setPersons(ps)
+        setAccounts(accs)
+        setProjects(projs)
+        setMerchants(mers)
+        setMetaLoaded(true)
+      } catch (e) {
+        console.error("Meta Load Error", e)
+      }
+    }
+    loadMeta()
+  }, [])
+
+  // Transaction Load (Depends on metaLoaded to ensure filters work correctly?)
+  // Actually filters just match IDs, so strictly strict metadata dependency isn't needed for *fetching*, 
+  // but for *displaying* names in filters we might want it.
+  // Using metaLoaded to prevent flicker is good practice.
+
+  useEffect(() => {
+    if (metaLoaded) {
+      loadTransactions()
+    }
+  }, [range, searchParams, metaLoaded])
+
+  const loadTransactions = async () => {
     try {
       const { start, end } = getDateRangeForFilter()
       // Convert to Local ISO String to match DB format (YYYY-MM-DDTHH:mm:ss)
       const toLocalISO = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString()
 
-      const [rangeTrans, allCats, allTags, allPersons, allAccounts, allProjects, allMerchants] = await Promise.all([
-        getTransactionsByDateRange(toLocalISO(start), toLocalISO(end)),
-        getAllCategories(),
-        getAllTags(),
-        getAllPersons(),
-        getAllAccounts(),
-        getAllProjects(),
-        getAllMerchants()
-      ])
-
-      // Load Photos for transactions
-      const transWithPhotos = await Promise.all(rangeTrans.map(async t => {
-        const photos = await getPhotosByTransactionId(t.id)
-        return { ...t, photos: photos || [] }
-      }))
+      // Fetch ONLY transactions
+      const rangeTrans = await getTransactionsByDateRange(toLocalISO(start), toLocalISO(end))
 
       // 过滤逻辑
-      let filtered = transWithPhotos
+      let filtered = rangeTrans
       const categoryId = searchParams.get('categoryId')
       const accountId = searchParams.get('accountId')
       const merchantId = searchParams.get('merchantId')
       const projectId = searchParams.get('projectId')
       const personId = searchParams.get('personId')
       const subCategory = searchParams.get('subCategory')
+      const remarks = searchParams.get('remarks') // Assuming potential future filter
 
       if (categoryId) { const ids = categoryId.split(','); filtered = filtered.filter(t => ids.includes(String(t.categoryId))) }
       if (accountId) { const ids = accountId.split(','); filtered = filtered.filter(t => ids.includes(String(t.accountId)) || ids.includes(String(t.toAccountId))) }
@@ -228,17 +376,9 @@ function Records() {
       if (subCategory) { filtered = filtered.filter(t => t.subCategory === subCategory) }
 
       // 按日期降序排序
-      setTransactions(filtered.sort((a, b) => new Date(b.date) - new Date(a.date)))
-      setCategories(allCats)
-      setTags(allTags)
-      setPersons(allPersons)
-      setTransactions(filtered.sort((a, b) => new Date(b.date) - new Date(a.date)))
-      setCategories(allCats)
-      setTags(allTags)
-      setPersons(allPersons)
-      setAccounts(allAccounts)
-      setProjects(allProjects)
-      setMerchants(allMerchants)
+      const sorted = filtered.sort((a, b) => new Date(b.date) - new Date(a.date))
+
+      setTransactions(sorted)
     } catch (error) {
       console.error('加载失败:', error)
     }
@@ -279,43 +419,14 @@ function Records() {
   // 排序月份
   const sortedMonths = Object.keys(groupedByMonth).sort((a, b) => new Date(b) - new Date(a))
 
-  // 折叠状态 (按月份)
-  const [collapsedMonths, setCollapsedMonths] = useState({})
-  const toggleMonthCollapse = (monthKey) => {
-    setCollapsedMonths(prev => ({ ...prev, [monthKey]: !prev[monthKey] }))
+  // 折叠状态管理
+  const [collapsedStates, setCollapsedStates] = useState({})
+  const toggleCollapse = (key) => {
+    setCollapsedStates(prev => ({ ...prev, [key]: !prev[key] }))
   }
 
-  // 获取季度 (1-4)
+  // 获取季度
   const getQuarter = (month) => Math.ceil(month / 3)
-  const getQuarterMonths = (quarter) => {
-    const startMonth = (quarter - 1) * 3 + 1
-    return [startMonth, startMonth + 1, startMonth + 2]
-  }
-
-  // 按季度分组
-  const groupedByQuarter = transactions.reduce((groups, trans) => {
-    if (!trans.date) return groups
-    const month = parseInt(trans.date.slice(5, 7))
-    const y = trans.date.slice(0, 4)
-    const q = getQuarter(month)
-    const key = `${y}-Q${q}`
-    if (!groups[key]) groups[key] = []
-    groups[key].push(trans)
-    return groups
-  }, {})
-
-  // 排序季度
-  const sortedQuarters = Object.keys(groupedByQuarter).sort((a, b) => {
-    const [yA, qA] = a.split('-Q')
-    const [yB, qB] = b.split('-Q')
-    return yB - yA || qB - qA
-  })
-
-  // 折叠状态 (按季度)
-  const [collapsedQuarters, setCollapsedQuarters] = useState({})
-  const toggleQuarterCollapse = (quarterKey) => {
-    setCollapsedQuarters(prev => ({ ...prev, [quarterKey]: !prev[quarterKey] }))
-  }
 
   // Search Filtering
   const filterByKeyword = (trans) => {
@@ -420,85 +531,25 @@ function Records() {
   const totalIncome = transactions.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
   const totalExpense = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
 
-  // 渲染单条交易
+  // 渲染单条交易 (使用新的组件)
   const renderTransactionItem = (trans) => {
-    const category = getCategory(trans.categoryId)
-    const isSelected = selectedIds.has(trans.id)
-
     return (
-      <div
+      <RecordItem
         key={trans.id}
-        className={`record-item ${isSelectionMode && isSelected ? 'selected' : ''}`}
-        onClick={() => {
-          if (isSelectionMode) {
-            toggleSelection(trans.id)
-          } else {
-            handleEdit(trans.id)
-          }
-        }}
-      >
-        {isSelectionMode && (
-          <div className="selection-checkbox">
-            {isSelected ? <Check size={16} color="white" /> : null}
-          </div>
-        )}
-
-        <div className="category-icon" style={{ backgroundColor: '#fff' }}>
-          <span style={{ fontSize: '24px' }}>{category.icon}</span>
-        </div>
-
-        <div className="record-content">
-          <div className="record-main">
-            <span className="category-name">
-              {category.name}
-              {trans.subCategory && <span style={{ color: '#999', fontWeight: 400 }}> · {trans.subCategory}</span>}
-            </span>
-            <span className={`amount ${trans.type}`}>
-              {formatAmount(trans.amount)}
-            </span>
-          </div>
-          <div className="record-sub">
-            <div className="sub-left">
-              {trans.remark && <span className="remark">{trans.remark}</span>}
-
-              {trans.photos && trans.photos.length > 0 && (
-                <div className="record-photos" style={{ display: 'flex', gap: 4, margin: '4px 0', overflowX: 'auto' }}>
-                  {trans.photos.map(p => (
-                    <img key={p.id} src={p.data} alt="img" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, border: '1px solid #eee' }} />
-                  ))}
-                </div>
-              )}
-
-              <div className="meta-info">
-                <span>{accounts.find(a => a.id === trans.accountId)?.name || '现金'}</span>
-                <span> · </span>
-                <span>{persons.find(p => p.id === trans.personId)?.name || '我'}</span>
-                <span> · </span>
-                <span>{trans.date.split('T')[1]}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {!isSelectionMode && (
-          <button
-            className="delete-btn"
-            onClick={(e) => { e.stopPropagation(); handleDelete(trans.id); }}
-            style={{
-              background: '#ff4d4f',
-              color: '#fff',
-              border: 'none',
-              padding: '8px 16px',
-              borderRadius: 4,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4
-            }}
-          >
-            <Trash2 size={16} color="#fff" />
-          </button>
-        )}
-      </div>
+        trans={trans}
+        category={getCategory(trans.categoryId)}
+        account={accounts.find(a => a.id === trans.accountId)}
+        person={persons.find(p => p.id === trans.personId)}
+        isSelected={selectedIds.has(trans.id)}
+        isSelectionMode={isSelectionMode}
+        isSwiped={swipedItemId === trans.id}
+        setSwipedItemId={setSwipedItemId}
+        toggleSelection={toggleSelection}
+        handleDelete={handleDelete}
+        handleEdit={handleEdit}
+        setGallery={setGallery}
+        formatAmount={formatAmount}
+      />
     )
   }
 
@@ -811,193 +862,119 @@ function Records() {
 
       {/* 列表内容 */}
       <div className="records-list">
-        {/* 年度视图: 按月分组 */}
-        {range === 'year' ? (
-          sortedMonths.map(monthKey => {
-            const monthTrans = groupedByMonth[monthKey]
-            const [y, m] = monthKey.split('-')
-            const monthIncome = monthTrans.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
-            const monthExpense = monthTrans.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
-            const isMonthCollapsed = collapsedMonths[monthKey]
+        {useMemo(() => {
+          if (transactions.length === 0) return null
 
-            // 该月的日期分组
-            const monthDates = Object.keys(groupedTransactions)
-              .filter(d => d.startsWith(monthKey))
-              .sort((a, b) => new Date(b) - new Date(a))
+          // 定义分组逻辑
+          let groupKeyFn, groupTitleFn, subGroupKeyFn, subGroupTitleFn
 
-            return (
-              <div key={monthKey} className="month-section">
-                {/* 月度汇总头 */}
-                <div className="month-summary-header" onClick={() => toggleMonthCollapse(monthKey)} style={{ cursor: 'pointer' }}>
-                  <div className="month-date">
-                    <span className="month-val">{parseInt(m)}月</span>
-                    <span className="year-val">{y}</span>
-                  </div>
-                  <div className="month-stats">
-                    <div className="stats-row">
-                      <span className="label">结余</span>
-                      <span className="val">{formatAmount(monthIncome - monthExpense)}</span>
-                      <div className="arrow-box" style={{ transform: isMonthCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
-                        <ChevronDown size={12} color="#999" />
-                      </div>
-                    </div>
-                    <div className="stats-detail">
-                      <span>收入 {formatAmount(monthIncome)}</span>
-                      <span className="divider">|</span>
-                      <span>支出 {formatAmount(monthExpense)}</span>
-                    </div>
-                  </div>
-                </div>
+          switch (range) {
+            case 'year':
+              groupKeyFn = (t) => t.date.slice(0, 7) // 按月
+              groupTitleFn = (key) => `${parseInt(key.split('-')[1])}月`
+              break
+            case 'quarter':
+              groupKeyFn = (t) => {
+                const m = parseInt(t.date.slice(5, 7))
+                return `${t.date.slice(0, 4)}-Q${getQuarter(m)}`
+              }
+              groupTitleFn = (key) => `第${['', '一', '二', '三', '四'][parseInt(key.split('-Q')[1])]}季度`
+              subGroupKeyFn = (t) => t.date.slice(0, 7)
+              subGroupTitleFn = (key) => `${parseInt(key.split('-')[1])}月`
+              break
+            default:
+              groupKeyFn = (t) => t.date.split('T')[0] // 按天
+              groupTitleFn = (key) => {
+                const d = new Date(key)
+                const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+                return `${key.split('-')[1]}月${key.split('-')[2]}日 ${weekDays[d.getDay()]}`
+              }
+              break
+          }
 
-                {/* 月内日期列表 */}
-                {!isMonthCollapsed && monthDates.map(date => {
-                  const dayTransactions = groupedTransactions[date].filter(filterByKeyword)
-                  if (dayTransactions.length === 0) return null
-                  const weekDay = new Date(date).getDay()
-                  const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-
-                  return (
-                    <div key={date} className="day-group">
-                      <div className="day-simple-header">
-                        <span>{date.split('-')[1]}月{date.split('-')[2]}日 {weekDays[weekDay]}</span>
-                      </div>
-                      {dayTransactions.map(trans => renderTransactionItem(trans))}
-                    </div>
-                  )
-                })}
-              </div>
-            )
+          // 执行分组
+          const groups = {}
+          transactions.forEach(t => {
+            if (!filterByKeyword(t)) return
+            const key = groupKeyFn(t)
+            if (!groups[key]) groups[key] = []
+            groups[key].push(t)
           })
-        ) : range === 'quarter' ? (
-          /* 季度视图: 按季度分组，内含月份 */
-          sortedQuarters.map(quarterKey => {
-            const quarterTrans = groupedByQuarter[quarterKey]
-            const [y, q] = quarterKey.split('-Q')
-            const quarterIncome = quarterTrans.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
-            const quarterExpense = quarterTrans.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
-            const isQuarterCollapsed = collapsedQuarters[quarterKey]
-            const quarterLabel = ['', '一', '二', '三', '四'][parseInt(q)]
 
-            // 该季度包含的月份
-            const quarterMonthKeys = sortedMonths.filter(mk => {
-              const [my, mm] = mk.split('-')
-              return my === y && getQuarter(parseInt(mm)) === parseInt(q)
-            })
+          const sortedKeys = Object.keys(groups).sort((a, b) => b.localeCompare(a))
+
+          return sortedKeys.map(key => {
+            const groupTrans = groups[key]
+            const income = groupTrans.filter(t => t.type === 'income').reduce((s, x) => s + Number(x.amount), 0)
+            const expense = groupTrans.filter(t => t.type === 'expense').reduce((s, x) => s + Number(x.amount), 0)
+            const isCollapsed = collapsedStates[key]
 
             return (
-              <div key={quarterKey} className="quarter-section">
-                {/* 季度汇总头 */}
-                <div className="month-summary-header" onClick={() => toggleQuarterCollapse(quarterKey)} style={{ cursor: 'pointer', background: '#e8f4ff' }}>
+              <div key={key} className="group-section">
+                <div className="month-summary-header" onClick={() => toggleCollapse(key)} style={{ cursor: 'pointer' }}>
                   <div className="month-date">
-                    <span className="month-val">第{quarterLabel}季度</span>
-                    <span className="year-val">{y}</span>
+                    <span className="month-val">{groupTitleFn(key)}</span>
+                    <span className="year-val">{key.split('-')[0]}</span>
                   </div>
                   <div className="month-stats">
                     <div className="stats-row">
-                      <span className="label">结余</span>
-                      <span className="val">{formatAmount(quarterIncome - quarterExpense)}</span>
-                      <div className="arrow-box" style={{ transform: isQuarterCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+                      <span className="val" style={{ color: (income - expense) >= 0 ? 'var(--income)' : 'var(--expense)' }}>
+                        {formatAmount(income - expense)}
+                      </span>
+                      <div className="arrow-box" style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
                         <ChevronDown size={12} color="#999" />
                       </div>
                     </div>
                     <div className="stats-detail">
-                      <span>收入 {formatAmount(quarterIncome)}</span>
+                      <span>收 {formatAmount(income)}</span>
                       <span className="divider">|</span>
-                      <span>支出 {formatAmount(quarterExpense)}</span>
+                      <span>支 {formatAmount(expense)}</span>
                     </div>
                   </div>
                 </div>
 
-                {/* 季度内月份列表 */}
-                {!isQuarterCollapsed && quarterMonthKeys.map(monthKey => {
-                  const monthTrans = groupedByMonth[monthKey] || []
-                  const [, m] = monthKey.split('-')
-                  const monthIncome = monthTrans.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
-                  const monthExpense = monthTrans.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
-                  const isMonthCollapsed = collapsedMonths[monthKey]
-
-                  const monthDates = Object.keys(groupedTransactions)
-                    .filter(d => d.startsWith(monthKey))
-                    .sort((a, b) => new Date(b) - new Date(a))
-
-                  return (
-                    <div key={monthKey} className="month-section" style={{ marginLeft: 8, borderLeft: '2px solid #ddd' }}>
-                      <div className="month-summary-header" onClick={() => toggleMonthCollapse(monthKey)} style={{ cursor: 'pointer', paddingLeft: 16 }}>
-                        <div className="month-date">
-                          <span className="month-val">{parseInt(m)}月</span>
-                        </div>
-                        <div className="month-stats">
-                          <div className="stats-row">
-                            <span className="val" style={{ fontSize: 14 }}>{formatAmount(monthIncome - monthExpense)}</span>
-                            <div className="arrow-box" style={{ transform: isMonthCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
-                              <ChevronDown size={12} color="#999" />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {!isMonthCollapsed && monthDates.map(date => {
-                        const dayTransactions = groupedTransactions[date].filter(filterByKeyword)
-                        if (dayTransactions.length === 0) return null
-                        const weekDay = new Date(date).getDay()
-                        const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-
+                {!isCollapsed && (
+                  <div className="group-content">
+                    {subGroupKeyFn ? (() => {
+                      const subGroups = {}
+                      groupTrans.forEach(t => {
+                        const sk = subGroupKeyFn(t)
+                        if (!subGroups[sk]) subGroups[sk] = []
+                        subGroups[sk].push(t)
+                      })
+                      return Object.keys(subGroups).sort((a, b) => b.localeCompare(a)).map(sk => {
+                        const skTrans = subGroups[sk]
+                        const skInc = skTrans.filter(t => t.type === 'income').reduce((s, x) => s + Number(x.amount), 0)
+                        const skExp = skTrans.filter(t => t.type === 'expense').reduce((s, x) => s + Number(x.amount), 0)
+                        const isSkCollapsed = collapsedStates[sk]
                         return (
-                          <div key={date} className="day-group">
-                            <div className="day-simple-header">
-                              <span>{date.split('-')[1]}月{date.split('-')[2]}日 {weekDays[weekDay]}</span>
+                          <div key={sk} style={{ marginLeft: 12, borderLeft: '2px solid #eee' }}>
+                            <div className="month-summary-header" onClick={() => toggleCollapse(sk)} style={{ cursor: 'pointer', padding: '10px 16px', border: 'none' }}>
+                              <div className="month-date">
+                                <span className="month-val" style={{ fontSize: 14 }}>{subGroupTitleFn(sk)}</span>
+                              </div>
+                              <div className="month-stats">
+                                <div className="stats-row" style={{ margin: 0 }}>
+                                  <span className="val" style={{ fontSize: 13 }}>{formatAmount(skInc - skExp)}</span>
+                                  <div className="arrow-box" style={{ width: 14, height: 14, transform: isSkCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>
+                                    <ChevronDown size={10} />
+                                  </div>
+                                </div>
+                              </div>
                             </div>
-                            {dayTransactions.map(trans => renderTransactionItem(trans))}
+                            {!isSkCollapsed && skTrans.map(t => renderTransactionItem(t))}
                           </div>
                         )
-                      })}
-                    </div>
-                  )
-                })}
+                      })
+                    })() : (
+                      groupTrans.map(t => renderTransactionItem(t))
+                    )}
+                  </div>
+                )}
               </div>
             )
           })
-        ) : (
-          /* 非年度视图: 保持原有逻辑 */
-          <>
-            {/* 单月汇总头 */}
-            <div className="month-summary-header" onClick={() => setIsCollapsed(!isCollapsed)} style={{ cursor: 'pointer' }}>
-              <div className="month-date">
-                <span className="month-val">{month}月</span>
-                <span className="year-val">{year}</span>
-              </div>
-              <div className="month-stats">
-                <div className="stats-row">
-                  <span className="label">结余</span>
-                  <span className="val">{formatAmount(totalIncome - totalExpense)}</span>
-                  <div className="arrow-box" style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
-                    <ChevronDown size={12} color="#999" />
-                  </div>
-                </div>
-                <div className="stats-detail">
-                  <span>收入 {formatAmount(totalIncome)}</span>
-                  <span className="divider">|</span>
-                  <span>支出 {formatAmount(totalExpense)}</span>
-                </div>
-              </div>
-            </div>
-
-            {!isCollapsed && displayDates.map(date => {
-              const dayTransactions = groupedTransactions[date].filter(filterByKeyword)
-              const weekDay = new Date(date).getDay()
-              const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-
-              return (
-                <div key={date} className="day-group">
-                  <div className="day-simple-header">
-                    <span>{date.split('-')[1]}月{date.split('-')[2]}日 {weekDays[weekDay]}</span>
-                  </div>
-                  {dayTransactions.map(trans => renderTransactionItem(trans))}
-                </div>
-              )
-            })}
-          </>
-        )}
+        }, [transactions, searchKeyword, collapsedStates, range])}
 
         {transactions.length === 0 && (
           <div className="empty-state">
@@ -1136,18 +1113,108 @@ function Records() {
         )
       }
 
-      {/* Calendar Jump Modal */}
-      <DatePickerModal
-        isOpen={showCalendarJump}
-        onClose={() => setShowCalendarJump(false)}
-        title="跳转到日期"
-        initialDate={currentDate.toISOString().slice(0, 10)}
-        onSelect={(date) => {
-          const d = new Date(date)
-          navigate(`/records?range=month&year=${d.getFullYear()}&month=${d.getMonth() + 1}`, { replace: true })
-          setShowCalendarJump(false)
-        }}
-      />
+      {/* Image Gallery Modal */}
+      {gallery.isOpen && (
+        <div
+          className="gallery-overlay"
+          onClick={() => setGallery({ ...gallery, isOpen: false })}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.95)',
+            zIndex: 2000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            touchAction: 'none'
+          }}
+          onTouchStart={(e) => {
+            gallery._startX = e.touches[0].clientX;
+          }}
+          onTouchEnd={(e) => {
+            if (!gallery._startX) return;
+            const diff = gallery._startX - e.changedTouches[0].clientX;
+            if (diff > 50 && gallery.index < gallery.images.length - 1) {
+              setGallery(prev => ({ ...prev, index: prev.index + 1 }));
+            } else if (diff < -50 && gallery.index > 0) {
+              setGallery(prev => ({ ...prev, index: prev.index - 1 }));
+            }
+            gallery._startX = null;
+          }}
+        >
+          {/* Main Image */}
+          <img
+            src={gallery.images[gallery.index]}
+            alt="gallery"
+            style={{
+              maxWidth: '100vw',
+              maxHeight: '80vh',
+              objectFit: 'contain',
+              transition: 'all 0.3s ease'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+
+          {/* Indicators */}
+          <div style={{
+            position: 'absolute',
+            bottom: 'calc(40px + var(--safe-area-bottom))',
+            color: '#fff',
+            fontSize: 14,
+            background: 'rgba(0,0,0,0.5)',
+            padding: '4px 12px',
+            borderRadius: 20
+          }}>
+            {gallery.index + 1} / {gallery.images.length}
+          </div>
+
+          {/* Close Button */}
+          <button
+            onClick={() => setGallery({ ...gallery, isOpen: false })}
+            style={{
+              position: 'absolute',
+              top: 'calc(20px + var(--safe-area-top))',
+              right: 20,
+              background: 'rgba(255,255,255,0.2)',
+              border: 'none',
+              width: 40,
+              height: 40,
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#fff'
+            }}
+          >
+            <X size={28} />
+          </button>
+
+          {/* Navigation Arrows (for PC) */}
+          {gallery.images.length > 1 && (
+            <>
+              {gallery.index > 0 && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setGallery(prev => ({ ...prev, index: prev.index - 1 })); }}
+                  style={{ position: 'absolute', left: 20, background: 'none', border: 'none', color: '#fff', opacity: 0.5 }}
+                >
+                  <ChevronLeft size={40} />
+                </button>
+              )}
+              {gallery.index < gallery.images.length - 1 && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setGallery(prev => ({ ...prev, index: prev.index + 1 })); }}
+                  style={{ position: 'absolute', right: 20, background: 'none', border: 'none', color: '#fff', opacity: 0.5 }}
+                >
+                  <ChevronRight size={40} />
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <style>{`
         .records-page {
@@ -1339,6 +1406,27 @@ function Records() {
             background: #fff;
         }
 
+        .record-item-wrapper {
+          position: relative;
+          overflow: hidden;
+          background: #ff4d4f;
+        }
+
+        .record-item-bg {
+          position: absolute;
+          right: 0;
+          top: 0;
+          bottom: 0;
+          width: 80px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-weight: 500;
+          font-size: 14px;
+          z-index: 1;
+        }
+        
         .record-item {
           display: flex;
           align-items: flex-start; /* 对齐顶部 */
@@ -1370,14 +1458,17 @@ function Records() {
         
         .category-name {
             font-size: 16px;
-            color: #333;
-            font-weight: 500;
+            color: #1a1a1a;
+            font-weight: 600;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            letter-spacing: 0.2px;
         }
         
         .amount {
-            font-size: 16px; 
-            font-weight: 500;
-            font-family: 'DIN Alternate', sans-serif;
+            font-size: 19px; 
+            font-weight: 700;
+            font-family: 'DIN Alternate', 'Helvetica Neue', 'Arial', sans-serif;
+            letter-spacing: 0.5px;
         }
         
         .amount.expense { color: var(--expense); }
@@ -1407,7 +1498,7 @@ function Records() {
           width: 20px;
           height: 20px;
           border-radius: 50%;
-          border: 2px solid #ddd;
+          border: 1px solid rgba(0, 0, 0, 0.1);
           display: flex;
           align-items: center;
           justify-content: center;
@@ -1438,7 +1529,7 @@ function Records() {
           bottom: 0;
           left: 0;
           right: 0;
-          background: #fff;
+          background: var(--bg-card);
           display: flex;
           justify-content: space-around;
           padding: 12px 16px;
@@ -1465,7 +1556,7 @@ function Records() {
           align-items: center;
           gap: 4px;
           font-size: 11px;
-          color: #666;
+          color: var(--text-secondary);
         }
 
         .batch-btn.delete { color: #FF6B6B; }
@@ -1485,7 +1576,7 @@ function Records() {
         }
 
         .modal-content {
-          background: #fff;
+          background: var(--bg-card);
           width: 80%;
           max-width: 320px;
           border-radius: 16px;
@@ -1505,7 +1596,7 @@ function Records() {
 
         .tag-option, .person-option {
           padding: 8px 12px;
-          background: #f5f5f5;
+          background: rgba(0, 0, 0, 0.05);
           border-radius: 20px;
           font-size: 13px;
         }
@@ -1532,20 +1623,20 @@ function Records() {
         .empty-title {
           font-size: 18px;
           font-weight: 600;
-          color: #333;
+          color: var(--text-primary);
           margin: 0;
         }
 
         .empty-subtitle {
           font-size: 14px;
-          color: #999;
+          color: var(--text-muted);
           margin: 0;
         }
 
         .add-record-btn {
           margin-top: 16px;
           padding: 10px 32px;
-          background: #fff;
+          background: var(--bg-card);
           border: 2px solid #FFB800;
           color: #FFB800;
           border-radius: 24px;
@@ -1577,7 +1668,7 @@ function Records() {
         }
 
         .range-modal {
-          background: #fff;
+          background: var(--bg-card);
           width: 100%;
           border-radius: 16px 16px 0 0;
           padding: 16px 0;
@@ -1587,7 +1678,7 @@ function Records() {
         .range-option {
           padding: 16px 24px;
           font-size: 16px;
-          color: #333;
+          color: var(--text-primary);
           cursor: pointer;
         }
 
@@ -1597,7 +1688,7 @@ function Records() {
         }
 
         .range-option:active {
-          background: #f5f5f5;
+          background: rgba(0, 0, 0, 0.05);
         }
       `}</style>
     </div >

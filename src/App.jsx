@@ -6,6 +6,7 @@ import { initDB, getDB } from './db/database'
 import { addTransaction } from './db/stores'
 import { secureStorage } from './utils/secureStorage'
 import { logger } from './utils/logger'
+import { ThemeService } from './services/ThemeService'
 
 // Lazy load larger pages for code splitting
 const Records = lazy(() => import('./pages/Records'))
@@ -34,13 +35,13 @@ const PageLoader = () => (
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: '#f5f6fa'
+        background: 'var(--bg-app)'
     }}>
         <div style={{
             width: 32,
             height: 32,
-            border: '3px solid #eee',
-            borderTopColor: '#FFB800',
+            border: '3px solid rgba(0,0,0,0.05)',
+            borderTopColor: 'var(--primary)',
             borderRadius: '50%',
             animation: 'spin 1s linear infinite'
         }} />
@@ -54,6 +55,7 @@ function App() {
     const [loading, setLoading] = useState(true)
 
     useEffect(() => {
+        ThemeService.init()
         const init = async () => {
             // 优先从 secureStorage 获取 (异步API)
             const userId = await secureStorage.get('user_id')
@@ -178,8 +180,8 @@ function App() {
           .loading-spinner {
             width: 40px;
             height: 40px;
-            border: 3px solid #eee;
-            border-top-color: #FFB800;
+            border: 3px solid rgba(0,0,0,0.05);
+            border-top-color: var(--primary);
             border-radius: 50%;
             animation: spin 1s linear infinite;
           }
@@ -199,13 +201,13 @@ function App() {
         )
     }
 
-    const showNav = ['/records', '/statistics', '/calendar', '/settings'].includes(location.pathname)
+    const showNav = ['/', '/records', '/statistics', '/calendar', '/settings'].includes(location.pathname)
 
     return (
         <div className="app">
             <Suspense fallback={<PageLoader />}>
                 <Routes>
-                    <Route path="/" element={<Records />} />
+                    <Route path="/" element={<Home />} />
                     <Route path="/records" element={<Records />} />
                     <Route path="/statistics" element={<Statistics />} />
                     <Route path="/settings" element={<Settings />} />

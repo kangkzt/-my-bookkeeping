@@ -7,8 +7,8 @@ android {
         applicationId "com.quickbook.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "1.1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -18,10 +18,10 @@ android {
     }
     signingConfigs {
         release {
-            storeFile file("release.keystore")
-            storePassword "scarlet123"
-            keyAlias "scarlet-cosmos"
-            keyPassword "scarlet123"
+            storeFile file("my-release-key.keystore")
+            storePassword "password"
+            keyAlias "my-key-alias"
+            keyPassword "password"
         }
     }
     buildTypes {

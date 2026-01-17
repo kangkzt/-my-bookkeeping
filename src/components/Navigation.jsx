@@ -6,8 +6,8 @@ function Navigation() {
 
     const navItems = [
         { path: '/records', icon: List, label: '流水' },
-        { action: 'add', icon: Plus, label: '', isCenter: true },
         { path: '/statistics', icon: BarChart2, label: '报表' },
+        { action: 'add', icon: Plus, label: '', isCenter: true },
         { path: '/calendar', icon: Calendar, label: '日历' },
         { path: '/settings', icon: Settings, label: '设置' }
     ]

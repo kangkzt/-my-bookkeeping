@@ -4,8 +4,14 @@ import { useNavigate } from 'react-router-dom'
 import { getDB } from '../db/database'
 
 // 默认图标选项
-const ICONS = ['📁', '✈️', '🏠', '🎓', '💒', '🏥', '🚗', '🎉', '🎁', '💼', '📱', '🛍️', '🏖️', '🎯', '📊']
-const COLORS = ['#4ECDC4', '#FF6B6B', '#FFB800', '#667EEA', '#AA96DA', '#95E1D3', '#F38181', '#6C5CE7']
+const ICONS = [
+  '📁', '📂', '💼', '📊', '📈', '🎯', '🏠', '🚗', '✈️', '🎓',
+  '💒', '🏥', '🎉', '🎁', '📱', '💻', '🎮', '📚', '🌟', '❤️'
+]
+const COLORS = [
+  '#4ECDC4', '#FF6B6B', '#FFB800', '#667EEA', '#AA96DA',
+  '#95E1D3', '#F38181', '#6C5CE7', '#74B9FF', '#A8E6CF'
+]
 
 function Projects() {
   const navigate = useNavigate()
@@ -217,53 +223,62 @@ function Projects() {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          padding: 12px 16px;
-          padding-top: calc(12px + var(--safe-area-top));
+          padding: 16px 20px;
+          padding-top: calc(16px + var(--safe-area-top));
           background: #fff;
-          border-bottom: 1px solid #f0f0f0;
+          border-bottom: 1px solid rgba(0,0,0,0.03);
         }
 
         .page-header h1 {
           font-size: 18px;
           font-weight: 600;
-          color: #333;
+          color: #1a1a1a;
         }
 
         .back-btn, .add-btn {
-          width: 36px;
-          height: 36px;
+          width: 40px;
+          height: 40px;
           display: flex;
           align-items: center;
           justify-content: center;
-          background: none;
+          background: #f5f5f5;
           border: none;
+          border-radius: 12px;
           color: #333;
+          transition: all 0.2s;
         }
 
-        .page-content { padding: 16px; }
+        .back-btn:hover, .add-btn:hover {
+          background: #eee;
+        }
+
+        .page-content { padding: 20px; }
 
         .hint-text {
           font-size: 13px;
-          color: #999;
+          color: #888;
           margin-bottom: 16px;
         }
 
         .project-list {
           background: #fff;
-          border-radius: 12px;
+          border-radius: 16px;
           overflow: hidden;
+          box-shadow: 0 4px 16px rgba(0,0,0,0.04);
         }
 
         .project-item {
           display: flex;
           align-items: center;
-          padding: 16px;
-          border-bottom: 1px solid #f5f5f5;
+          padding: 18px 20px;
+          border-bottom: 1px solid rgba(0,0,0,0.03);
           cursor: pointer;
+          transition: background 0.15s;
         }
 
+        .project-item:hover { background: #f9f9f9; }
         .project-item:last-child { border-bottom: none; }
-        .project-item:active { background: #fafafa; }
+        .project-item:active { background: #f5f5f5; }
 
         .project-icon {
           width: 44px;

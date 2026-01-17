@@ -16,7 +16,7 @@
 import { openDB } from 'idb'
 
 const DEFAULT_DB_NAME = 'QuickBookDB'
-const DB_VERSION = 6
+const DB_VERSION = 8
 
 let db = null
 let currentDbName = null
@@ -266,6 +266,31 @@ export async function initDB(dbName = DEFAULT_DB_NAME) {
                 ]
                 defaultSubCats.forEach(s => subStore.add(s))
             }
+
+            // V7 Migration: Add system_stats store (2026-01-17)
+            if (!database.objectStoreNames.contains('system_stats')) {
+                const statsStore = database.createObjectStore('system_stats', {
+                    keyPath: 'key'
+                })
+                // Initialize global stats
+                statsStore.add({ key: 'global', income: 0, expense: 0 })
+            }
+
+            // V8 Migration: Ensure 'date' index exists (Performance Fix)
+            if (oldVersion < 8) {
+                if (database.objectStoreNames.contains('transactions')) {
+                    const txStore = transaction.objectStore('transactions')
+                    if (!txStore.indexNames.contains('date')) {
+                        txStore.createIndex('date', 'date')
+                    }
+                    if (!txStore.indexNames.contains('categoryId')) {
+                        txStore.createIndex('categoryId', 'categoryId')
+                    }
+                    if (!txStore.indexNames.contains('type')) {
+                        txStore.createIndex('type', 'type')
+                    }
+                }
+            }
         }
     })
     return db
@@ -297,24 +322,36 @@ export function getDB() {
 
 /**
  * 清空当前账本的主要数据 (保留配置)
- * 重置所有账户余额为0
+ * 重置所有账户余额为0，并重置累计统计
  */
 export async function clearCurrentBookData() {
     const db = getDB()
-    const tx = db.transaction(['transactions', 'photos', 'accounts'], 'readwrite')
+    const stores = ['transactions', 'photos', 'accounts']
+    if (db.objectStoreNames.contains('system_stats')) {
+        stores.push('system_stats')
+    }
 
-    // Clear transactions and photos
+    const tx = db.transaction(stores, 'readwrite')
+
+    // 1. 清空交易、照片
     await Promise.all([
         tx.objectStore('transactions').clear(),
         tx.objectStore('photos').clear()
     ])
 
-    // Reset account balances
+    // 2. 重置账户余额
     const accountStore = tx.objectStore('accounts')
     const accounts = await accountStore.getAll()
     for (const account of accounts) {
         account.balance = 0
         await accountStore.put(account)
+    }
+
+    // 3. 重置累计统计 (Fix: 解决用户反馈的数据清空后累计还在的问题)
+    if (db.objectStoreNames.contains('system_stats')) {
+        const statsStore = tx.objectStore('system_stats')
+        await statsStore.clear()
+        await statsStore.put({ key: 'global', income: 0, expense: 0 })
     }
 
     await tx.done

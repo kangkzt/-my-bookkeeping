@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChevronLeft, UploadCloud, DownloadCloud, FileSpreadsheet, FileJson, Check, AlertCircle, Loader2, Cloud, Settings, X } from 'lucide-react'
-import { importData, importCSVData, exportAllData, checkWebDAVConnection, uploadToWebDAV, downloadFromWebDAV } from '../db/sync'
+import { importData, importCSVData, exportAllData, checkWebDAVConnection, uploadToWebDAV, downloadFromWebDAV, importImagesFromZip, getDataCounts } from '../db/sync'
 import Toast from '../components/Toast'
 import ConfirmDialog from '../components/ConfirmDialog'
 import Papa from 'papaparse'
@@ -12,6 +12,7 @@ function ImportData() {
 
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState(null)
+  const abortControllerRef = useRef(null)
   const [importing, setImporting] = useState(false)
   const [importProgress, setImportProgress] = useState(0)
   const [importMsg, setImportMsg] = useState('')
@@ -62,7 +63,19 @@ function ImportData() {
   useEffect(() => {
     const pwd = sessionStorage.getItem('cloud_dav_password')
     if (pwd) setCloudConfig(prev => ({ ...prev, davPassword: pwd }))
+    if (pwd) setCloudConfig(prev => ({ ...prev, davPassword: pwd }))
+    loadCounts()
   }, [])
+
+  const [dbCounts, setDbCounts] = useState(null)
+  const loadCounts = async () => {
+    try {
+      const c = await getDataCounts()
+      setDbCounts(c)
+    } catch (e) {
+      console.error(e)
+    }
+  }
 
   // 云端同步 - 上传
   const handleCloudUpload = async () => {
@@ -75,18 +88,45 @@ function ImportData() {
     setSyncing(true)
     setSyncStatus(null)
     setImportMsg('正在打包数据...')
+
+    // Create new abort controller
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
     try {
       const data = await exportAllData()
+
+      if (controller.signal.aborted) return
+
       setImportMsg('正在上传...')
-      await uploadToWebDAV(cloudConfig, data)
-      setSyncStatus('success')
-      setImportMsg('备份上传成功！')
+      await uploadToWebDAV(cloudConfig, data, controller.signal) // Pass signal
+
+      if (!controller.signal.aborted) {
+        setSyncStatus('success')
+        setImportMsg('备份上传成功！')
+      }
     } catch (e) {
-      console.error(e)
-      setSyncStatus('error')
-      setImportMsg('上传失败: ' + e.message)
+      if (e.message === 'Aborted') {
+        setImportMsg('已取消上传')
+      } else {
+        console.error(e)
+        setSyncStatus('error')
+        setImportMsg('上传失败: ' + e.message)
+      }
     } finally {
+      if (!controller.signal.aborted) {
+        setSyncing(false)
+      }
+      abortControllerRef.current = null
+    }
+  }
+
+  const handleAbort = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
       setSyncing(false)
+      setImportMsg('操作已取消')
+      setSyncStatus('info') // or custom 'aborted'
     }
   }
 
@@ -116,6 +156,9 @@ function ImportData() {
           setSyncStatus('success')
           showToast('数据恢复成功！', 'success')
           setImportMsg('数据恢复成功！')
+          setTimeout(() => {
+            window.location.reload()
+          }, 1000)
         } catch (e) {
           console.error(e)
           setSyncStatus('error')
@@ -137,12 +180,28 @@ function ImportData() {
     }
   }
 
-  // 本地文件选择
-  const handleFileSelect = (e) => {
-    const file = e.target.files[0]
-    if (!file) return
-
+  // 实际处理文件导入的函数
+  const processFile = (file) => {
     const isCsv = file.name.toLowerCase().endsWith('.csv')
+    const isZip = file.name.toLowerCase().endsWith('.zip')
+
+    // ZIP Image Import
+    if (isZip) {
+      setImporting(true)
+      setImportMsg('正在解压并恢复图片...')
+      setTimeout(async () => {
+        try {
+          const count = await importImagesFromZip(file, (p) => setImportProgress(p))
+          setImportMsg(`成功恢复 ${count} 张图片`)
+        } catch (err) {
+          setImportMsg('图片恢复失败: ' + err.message)
+        } finally {
+          setImporting(false)
+        }
+      }, 100)
+      return
+    }
+
     const reader = new FileReader()
 
     setImporting(true)
@@ -183,6 +242,9 @@ function ImportData() {
           await importData(data, (p) => setImportProgress(p))
           setImportMsg('JSON 数据恢复成功')
           setImporting(false)
+          setTimeout(() => {
+            window.location.reload()
+          }, 1000)
         }
       } catch (error) {
         setImportMsg('文件解析失败：' + error.message)
@@ -191,6 +253,34 @@ function ImportData() {
     }
 
     reader.readAsText(file) // CSV use text
+  }
+
+  // 本地文件选择
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+
+    // Clear input so same file can be selected again if needed
+    e.target.value = ''
+
+    const isCsv = file.name.toLowerCase().endsWith('.csv')
+
+    // 如果是 CSV 且数据库已有数据，提示用户
+    if (isCsv && dbCounts && dbCounts.transactions > 0) {
+      setConfirmDialog({
+        isOpen: true,
+        title: '导入确认',
+        content: '检测到当前账本已有数据。CSV 导入将追加数据（已开启自动去重）。如果您正在进行初始数据迁移，强烈建议先清空账本以防止数据混乱。是否继续？',
+        confirmText: '继续追加',
+        type: 'warning',
+        onConfirm: () => {
+          setConfirmDialog(prev => ({ ...prev, isOpen: false }))
+          processFile(file)
+        }
+      })
+    } else {
+      processFile(file)
+    }
   }
 
   return (
@@ -203,6 +293,30 @@ function ImportData() {
       </div>
 
       <div className="content">
+        {/* 数据统计卡片 */}
+        {dbCounts && (
+          <div className="card stats-card" style={{ padding: '16px' }}>
+            <div className="stats-grid">
+              <div className="stat-item">
+                <span className="stat-num">{dbCounts.transactions}</span>
+                <span className="stat-label">记账笔数</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-num">{dbCounts.photos}</span>
+                <span className="stat-label">图片附件</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-num">{dbCounts.accounts}</span>
+                <span className="stat-label">资产账户</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-num">{dbCounts.cats + dbCounts.tags + dbCounts.persons || '-'}</span>
+                <span className="stat-label">其他基础</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* 云端同步卡片 */}
         <div className="card cloud-card">
           <div className="card-header">
@@ -219,15 +333,27 @@ function ImportData() {
           </div>
 
           <div className="sync-actions">
-            <button className="sync-btn upload" onClick={handleCloudUpload} disabled={syncing}>
-              {syncing ? <Loader2 className="spin" size={20} /> : <UploadCloud size={20} />}
-              <span>上传备份</span>
-            </button>
-            <button className="sync-btn download" onClick={handleCloudDownload} disabled={syncing}>
-              {syncing ? <Loader2 className="spin" size={20} /> : <DownloadCloud size={20} />}
-              <span>恢复数据</span>
-            </button>
+            {!syncing ? (
+              <>
+                <button className="sync-btn upload" onClick={handleCloudUpload}>
+                  <UploadCloud size={20} />
+                  <span>上传备份</span>
+                </button>
+                <button className="sync-btn download" onClick={handleCloudDownload}>
+                  <DownloadCloud size={20} />
+                  <span>恢复数据</span>
+                </button>
+              </>
+            ) : (
+              <button className="sync-btn stop" onClick={handleAbort} style={{ gridColumn: '1 / -1', background: '#FFEBEE', color: '#D32F2F', borderColor: '#FFCDD2' }}>
+                <X size={20} />
+                <span>停止当前操作</span>
+              </button>
+            )}
           </div>
+          <p style={{ marginTop: '12px', fontSize: 12, color: '#999', textAlign: 'center' }}>
+            * 云端同步仅备份文字数据 (速度快)。图片请使用下方独立备份功能。
+          </p>
 
           {syncStatus === 'success' && (
             <div className="status-tip success">
@@ -256,13 +382,13 @@ function ImportData() {
           <div className="import-area" onClick={() => fileInputRef.current.click()}>
             <div className="upload-placeholder">
               <div className="up-icon">⊕</div>
-              <p>点击选择文件 (CSV/JSON)</p>
+              <p>点击选择文件 (CSV/JSON/ZIP)</p>
             </div>
           </div>
           <input
             type="file"
             ref={fileInputRef}
-            accept=".csv,.json"
+            accept=".csv,.json,.zip"
             className="hidden-input"
             onChange={handleFileSelect}
           />
@@ -290,6 +416,7 @@ function ImportData() {
           <ul>
             <li>支持<b>随手记</b>导出文件的直接导入</li>
             <li>支持本应用导出的 <b>JSON</b> 备份文件恢复</li>
+            <li>支持 <b>ZIP</b> 图片包独立恢复</li>
             <li>CSV文件请确保包含：日期、类型、金额、分类、账户 (会自动去除随手记头部)</li>
           </ul>
         </div>
@@ -476,7 +603,14 @@ function ImportData() {
         .save-btn-full {
            width: 100%; padding: 12px; background: #FFB800; color: #fff; border: none; border-radius: 8px; font-size: 16px; margin-top: 8px;
         }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align: center; }
+        .stat-item { display: flex; flex-direction: column; gap: 4px; }
+        .stat-num { font-size: 16px; font-weight: bold; color: #333; }
+        .stat-label { font-size: 11px; color: #999; }
       `}</style>
+
+      {/* Global Toast & Dialog */}
 
       {/* Global Toast & Dialog */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}

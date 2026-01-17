@@ -5,11 +5,34 @@
 import { getDB } from './database'
 import { createClient } from 'webdav'
 import Papa from 'papaparse'
+import JSZip from 'jszip'
+import { addTransaction, addTransactionsBatch } from './stores'
 
 /**
  * 导出所有数据为JSON
+ * @param {boolean} includePhotos - 是否包含图片
  */
-export async function exportAllData() {
+export async function getDataCounts() {
+    const db = getDB()
+    const [t, c, tag, p, a, ph] = await Promise.all([
+        db.count('transactions'),
+        db.count('categories'),
+        db.count('tags'),
+        db.count('persons'),
+        db.count('accounts'),
+        db.count('photos')
+    ])
+    return {
+        transactions: t,
+        categories: c,
+        tags: tag,
+        persons: p,
+        accounts: a,
+        photos: ph
+    }
+}
+
+export async function exportAllData(includePhotos = true) {
     const db = getDB()
 
     const data = {
@@ -20,7 +43,7 @@ export async function exportAllData() {
         tags: await db.getAll('tags'),
         persons: await db.getAll('persons'),
         accounts: await db.getAll('accounts'),
-        photos: await db.getAll('photos')
+        photos: includePhotos ? await db.getAll('photos') : []
     }
 
     return data
@@ -213,8 +236,7 @@ export async function importCSVData(rows, onProgress = () => { }) {
         catMap.set('其他', defaultCatId)
     }
 
-    const tx = db.transaction(['transactions', 'merchants', 'persons', 'accounts'], 'readwrite')
-    const store = tx.objectStore('transactions')
+    const tx = db.transaction(['merchants', 'persons', 'accounts'], 'readwrite')
     const merchantStore = tx.objectStore('merchants')
     const personStore = tx.objectStore('persons')
     const accountStore = tx.objectStore('accounts')
@@ -256,8 +278,17 @@ export async function importCSVData(rows, onProgress = () => { }) {
         return id
     }
 
+    // 4. 获取现有数据进行去重校验
+    const allExisting = await db.getAll('transactions')
+    const signatureSet = new Set(allExisting.map(t => {
+        // 签名生成规则：日期_金额_类型_备注 (粗略去重)
+        // 注意：这里日期使用 ISO 字符串的前 16 位 (YYYY-MM-DDTHH:mm) 忽略秒和毫秒，防止细微差异
+        return `${t.date.slice(0, 16)}_${t.amount}_${t.type}_${t.remark || ''}`
+    }))
+
     const total = rows.length
-    let batchPromises = []
+    let batchData = []
+    let skippedCount = 0
 
     for (let i = 0; i < total; i++) {
         const row = rows[i]
@@ -318,6 +349,18 @@ export async function importCSVData(rows, onProgress = () => { }) {
             const remark = row['备注'] || row['Remark'] || ''
             const project = row['项目'] || ''
 
+            // 检查重复
+            // 构造当前交易的签名
+            const currentSig = `${isoDate.slice(0, 16)}_${Math.abs(amount)}_${type}_${remark}`
+
+            if (signatureSet.has(currentSig)) {
+                skippedCount++
+                continue
+            }
+
+            // 新增：加入到 Set 中防止同批次内重复
+            signatureSet.add(currentSig)
+
             const transaction = {
                 date: isoDate,
                 type,
@@ -331,17 +374,18 @@ export async function importCSVData(rows, onProgress = () => { }) {
                 remark,
                 project,
                 created_at: new Date().toISOString(),
-                synced: 0 // Explicitly set unsynced for import
+                synced: 0
             }
 
-            // Add to batch
-            batchPromises.push(store.add(transaction))
+
+            // Add to batch data
+            batchData.push(transaction)
             count++
 
-            // Process batch if full
-            if (batchPromises.length >= 100) {
-                await Promise.all(batchPromises)
-                batchPromises = []
+            // Process batch if full (Larger batch for efficiency)
+            if (batchData.length >= 2000) {
+                await addTransactionsBatch(batchData)
+                batchData = []
                 onProgress(Math.round((i / total) * 100))
             }
 
@@ -351,8 +395,8 @@ export async function importCSVData(rows, onProgress = () => { }) {
     }
 
     // Process remaining
-    if (batchPromises.length > 0) {
-        await Promise.all(batchPromises)
+    if (batchData.length > 0) {
+        await addTransactionsBatch(batchData)
     }
 
     onProgress(100)
@@ -377,13 +421,23 @@ export async function checkWebDAVConnection(url, username, password) {
     }
 }
 
-export async function uploadToWebDAV(config, data) {
+export async function uploadToWebDAV(config, data, signal) {
     const { davUrl, davUser, davPassword } = config
     const fileName = `quickbook_backup_${new Date().toISOString().split('T')[0]}.json`
     const client = createClient(davUrl, { username: davUser, password: davPassword })
 
     const jsonStr = JSON.stringify(data, null, 2)
-    await client.putFileContents(`/${fileName}`, jsonStr)
+
+    // Check if aborted before starting upload
+    if (signal && signal.aborted) {
+        throw new Error('Aborted')
+    }
+
+    // Attempt to pass signal if library supports it in options. 
+    // If specific library version doesn't support it, we can't easily cancel the network request, 
+    // but we can start by checking signal.
+    // Assuming 'webdav' library supports passing options with signal to putFileContents.
+    await client.putFileContents(`/${fileName}`, jsonStr, { signal })
 }
 
 export async function downloadFromWebDAV(config) {
@@ -403,4 +457,136 @@ export async function downloadFromWebDAV(config) {
     const latestFile = backupFiles[0]
     const content = await client.getFileContents(latestFile.filename, { format: 'text' })
     return JSON.parse(content)
+}
+
+/**
+ * 导出图片为 ZIP (独立备份，二进制存储更省空间)
+ */
+export async function exportImagesAsZip(onProgress = () => { }) {
+    onProgress(10)
+    const db = getDB()
+    const photos = await db.getAll('photos')
+
+    if (photos.length === 0) throw new Error('没有图片可导出')
+
+    onProgress(30)
+    const zip = new JSZip()
+    const imgFolder = zip.folder("images")
+
+    // Helper: Base64 to Blob
+    const base64ToBlob = (dataURI) => {
+        try {
+            const splitDataURI = dataURI.split(',')
+            const byteString = splitDataURI[0].indexOf('base64') >= 0 ? atob(splitDataURI[1]) : decodeURI(splitDataURI[1])
+            const mimeString = splitDataURI[0].split(':')[1].split(';')[0]
+            const ia = new Uint8Array(byteString.length)
+            for (let i = 0; i < byteString.length; i++) {
+                ia[i] = byteString.charCodeAt(i)
+            }
+            return new Blob([ia], { type: mimeString })
+        } catch (e) {
+            console.error('Blob conversion failed', e)
+            return null
+        }
+    }
+
+    let processed = 0
+    for (const photo of photos) {
+        if (!photo.data) continue
+        const blob = base64ToBlob(photo.data)
+        if (blob) {
+            // Filename format: transactionId_photoId.jpg (or png)
+            // Detect extension
+            const ext = blob.type.split('/')[1] || 'jpg'
+            imgFolder.file(`${photo.transactionId}_${photo.id}.${ext}`, blob)
+        }
+        processed++
+        if (processed % 10 === 0) onProgress(30 + Math.round((processed / photos.length) * 40))
+    }
+
+    onProgress(80)
+    const content = await zip.generateAsync({ type: "blob" }, (metadata) => {
+        onProgress(80 + Math.round(metadata.percent * 0.2))
+    })
+
+    // Download
+    const url = URL.createObjectURL(content)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `quickbook_images_${new Date().toISOString().split('T')[0]}.zip`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    onProgress(100)
+}
+
+/**
+ * 从 ZIP 导入图片
+ */
+export async function importImagesFromZip(file, onProgress = () => { }) {
+    onProgress(10)
+    const db = getDB()
+    const zip = await JSZip.loadAsync(file)
+    const imgFolder = zip.folder("images")
+
+    if (!imgFolder) throw new Error('ZIP 文件格式不正确 (未找到 images 文件夹)')
+
+    const files = []
+    imgFolder.forEach((relativePath, zipEntry) => {
+        if (!zipEntry.dir) files.push(zipEntry)
+    })
+
+    if (files.length === 0) return 0
+
+    onProgress(20)
+    const tx = db.transaction('photos', 'readwrite')
+
+    // Clear existing photos? Maybe not forcibly clear, but merge?
+    // User requested "Restore", usually implies overwrite or addition. 
+    // Let's just add/overwrite if ID exists (ID is in filename).
+    // Actually IDB auto-increment IDs might conflict if we use the ID from filename as key.
+    // However, if we preserve IDs, we risk conflict if we didn't clear.
+    // Safe approach: Clear photos if doing a full restore, or just add.
+    // Let's assume this is a restore operation. We'll try to keep transactionId links valid.
+
+    let count = 0
+    for (const zipEntry of files) {
+        // Filename: transactionId_photoId.ext
+        const filename = zipEntry.name.split('/').pop() // remove folder prefix if any
+        const [namePart] = filename.split('.')
+        // namePart might be "transId_photoId"
+        const parts = namePart.split('_')
+        if (parts.length < 2) continue
+
+        const transactionId = Number(parts[0]) // transId
+        // We typically ignore the old photo ID and let IDB generate a new one, OR we try to reuse it?
+        // If "transactionId" is valid, that's what matters.
+        // But if the transactions were also imported, their IDs might be preserved.
+
+        try {
+            const blob = await zipEntry.async("blob")
+            // Convert Blob back to Base64
+            const reader = new FileReader()
+            const base64Promise = new Promise((resolve) => {
+                reader.onloadend = () => resolve(reader.result)
+                reader.readAsDataURL(blob)
+            })
+            const base64Data = await base64Promise
+
+            await tx.store.add({
+                transactionId: transactionId,
+                data: base64Data,
+                synced: 0,
+                updatedAt: Date.now()
+            })
+            count++
+            if (count % 10 === 0) onProgress(20 + Math.round((count / files.length) * 70))
+        } catch (e) {
+            console.error('Import image failed', filename, e)
+        }
+    }
+    await tx.done
+    onProgress(100)
+    return count
 }

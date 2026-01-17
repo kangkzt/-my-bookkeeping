@@ -3,7 +3,6 @@ import { ArrowLeft, Plus, Edit3, Wallet, CreditCard, PiggyBank, Landmark, Trendi
 import { useNavigate } from 'react-router-dom'
 import { useSwipeable } from 'react-swipeable'
 import { getDB } from '../db/database'
-import { getAllTransactions } from '../db/stores'
 
 // 账户分组定义
 const ACCOUNT_GROUPS = [
@@ -54,30 +53,13 @@ function Accounts() {
   const loadData = async () => {
     try {
       const db = getDB()
-      const [allAccounts, allTrans] = await Promise.all([
-        db.getAll('accounts'),
-        getAllTransactions()
-      ])
+      const allAccounts = await db.getAll('accounts')
 
-      // 计算动态余额
-      const calcAccounts = allAccounts.map(acc => {
-        let currentBal = Number(acc.balance || 0)
-        allTrans.forEach(t => {
-          const amt = Number(t.amount)
-          if (t.accountId === acc.id) {
-            if (t.type === 'expense') currentBal -= amt
-            if (t.type === 'income') currentBal += amt
-            if (t.type === 'transfer') currentBal -= amt
-          }
-          if (t.toAccountId === acc.id && t.type === 'transfer') {
-            currentBal += amt
-          }
-        })
-        return { ...acc, _currentBalance: currentBal }
-      })
+      // 数据库中的 balance 已经是实时余额，无需重复计算
+      // The balance in DB is already real-time, no need to recalculate
 
-      setAccounts(calcAccounts)
-      calculateTotals(calcAccounts)
+      setAccounts(allAccounts)
+      calculateTotals(allAccounts)
     } catch (error) {
       console.error('加载账户失败:', error)
     }
@@ -89,7 +71,7 @@ function Accounts() {
 
     allAccounts.forEach(acc => {
       const type = acc.type || 'other'
-      const amount = acc._currentBalance
+      const amount = Number(acc.balance || 0)
 
       if (['credit_card', 'loan'].includes(type)) {
         if (amount < 0) groupLiabilities += Math.abs(amount)
@@ -217,7 +199,7 @@ function Accounts() {
       <div className="account-groups">
         {ACCOUNT_GROUPS.map(group => {
           const groupAccounts = getGroupAccounts(group.types)
-          const groupTotal = groupAccounts.reduce((sum, acc) => sum + acc._currentBalance, 0)
+          const groupTotal = groupAccounts.reduce((sum, acc) => sum + Number(acc.balance || 0), 0)
           const isExpanded = expandedGroups[group.key]
           const GroupIcon = group.icon
 
@@ -241,8 +223,8 @@ function Accounts() {
                         <span className="account-name">{acc.name}</span>
                       </div>
                       <div className="account-amount">
-                        <span className={acc._currentBalance < 0 ? 'negative' : ''}>
-                          {formatAmount(acc._currentBalance)}
+                        <span className={Number(acc.balance || 0) < 0 ? 'negative' : ''}>
+                          {formatAmount(Number(acc.balance || 0))}
                         </span>
                         <ChevronRight size={16} color="#ccc" />
                       </div>
@@ -339,25 +321,28 @@ function Accounts() {
         }
 
         .page-header h1 {
-          font-size: 17px;
+          font-size: 18px;
           font-weight: 600;
-          color: #333;
+          color: #1a1a1a;
         }
 
         .back-btn, .edit-btn {
-          width: 36px;
-          height: 36px;
+          width: 40px;
+          height: 40px;
           display: flex;
           align-items: center;
           justify-content: center;
-          background: rgba(0,0,0,0.03);
+          background: #f5f5f5;
           border: none;
-          border-radius: 50%;
+          border-radius: 12px;
           color: #333;
-          transition: background 0.2s;
+          transition: all 0.2s;
+        }
+        .back-btn:hover, .edit-btn:hover {
+          background: #eee;
         }
         .back-btn:active, .edit-btn:active {
-          background: rgba(0,0,0,0.08);
+          background: #e0e0e0;
         }
 
         /* Asset Card */

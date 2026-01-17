@@ -6,10 +6,13 @@ import { getTransactionsByMonth, getAllCategories } from '../db/stores'
 
 function CalendarView() {
   const navigate = useNavigate()
+  const today = new Date()
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+
   const [currentDate, setCurrentDate] = useState(new Date())
   const [transactions, setTransactions] = useState([])
   const [categories, setCategories] = useState([])
-  const [selectedDate, setSelectedDate] = useState(null)
+  const [selectedDate, setSelectedDate] = useState(todayStr)
 
   // Swipe Logic
   const handlers = useSwipeable({
@@ -24,9 +27,6 @@ function CalendarView() {
 
   const year = currentDate.getFullYear()
   const month = currentDate.getMonth() + 1
-  const today = new Date()
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-
   useEffect(() => {
     loadData()
   }, [year, month])
@@ -201,7 +201,7 @@ function CalendarView() {
               </div>
             </div>
             <p className="empty-title">无流水</p>
-            <p className="empty-hint">点击右下角加号可快速记账</p>
+            <p className="empty-hint">点击右下角加号开始记账</p>
           </div>
         ) : (
           <div className="transaction-list">

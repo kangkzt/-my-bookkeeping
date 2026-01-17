@@ -9,6 +9,7 @@ import { getDB } from '../db/database'
 import { getAllCategories, getAllAccounts, getAllPersons, addTransaction, updateTransaction, getTransactionById, addPhoto, getPhotosByTransactionId, deletePhoto } from '../db/stores'
 import { recognizeReceipt } from '../utils/ocr'
 import { parseVoiceInput } from '../utils/nlp'
+import DatePickerModal from '../components/DatePickerModal'
 import './AddTransaction.css'
 
 // Constants for timeouts
@@ -61,6 +62,7 @@ function AddTransaction() {
   const [showAccountModal, setShowAccountModal] = useState(false)
   const [showToAccountModal, setShowToAccountModal] = useState(false)
   const [showPersonModal, setShowPersonModal] = useState(false)
+  const [showDatePicker, setShowDatePicker] = useState(false)
 
   // Media
   const [recognizing, setRecognizing] = useState(false)
@@ -156,12 +158,12 @@ function AddTransaction() {
     // Simulate progress behavior (clamp at 90% until done)
     const progressInterval = setInterval(() => {
       setOcrProgress(prev => prev < 90 ? prev + 5 : prev)
-    }, 500)
+    }, 250)
 
     try {
       const ocrTask = recognizeReceipt(file)
-      // Extend timeout to 45s for mobile (Tesseract + Network)
-      const timeoutTask = new Promise((_, reject) => setTimeout(() => reject(new Error('识别超时 (45s)')), 45000))
+      // Extend timeout to 5s for mobile (Tesseract + Network)
+      const timeoutTask = new Promise((_, reject) => setTimeout(() => reject(new Error('识别超时 (5s)')), 5000))
 
       const text = await Promise.race([ocrTask, timeoutTask])
 
@@ -274,16 +276,27 @@ function AddTransaction() {
     }
   }
 
+  // Voice recognition listener ref for safe cleanup
+  const voiceListenerRef = useRef(null)
+
   // Listener for "No Popup" mode
   useEffect(() => {
-    const l = SpeechRecognition.addListener('partialResults', (data) => {
-      if (data.matches && data.matches.length > 0) {
-        setVoiceTextInput(data.matches[0])
-      }
-    })
+    const setupListener = async () => {
+      voiceListenerRef.current = await SpeechRecognition.addListener('partialResults', (data) => {
+        if (data.matches && data.matches.length > 0) {
+          setVoiceTextInput(data.matches[0])
+        }
+      })
+    }
+    setupListener()
+
     return () => {
-      l.remove()
-      SpeechRecognition.removeAllListeners()
+      if (voiceListenerRef.current && typeof voiceListenerRef.current.remove === 'function') {
+        voiceListenerRef.current.remove()
+      }
+      if (SpeechRecognition.removeAllListeners) {
+        SpeechRecognition.removeAllListeners()
+      }
     }
   }, [])
 
@@ -566,7 +579,7 @@ function AddTransaction() {
 
   // Classic Theme Colors
   const getThemeColor = () => {
-    if (type === 'income') return '#FFB800'
+    if (type === 'income') return '#EF4444' // Red
     if (type === 'expense') return '#4ECDC4' // Cyan Teal
     if (type === 'transfer') return '#4A90E2'
     if (type === 'loan') return '#9B59B6'
@@ -747,11 +760,9 @@ function AddTransaction() {
           {/* Date Chip */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div onClick={() => adjustDate(-1)} style={{ padding: 4 }}><ChevronLeft size={16} color="#666" /></div>
-            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', background: '#F3F4F6', borderRadius: 16, padding: '6px 12px', fontSize: 12, color: '#333' }}>
-              <span style={{ pointerEvents: 'none' }}>{formatDateCN(date)}</span>
-              <input type="datetime-local" value={date} onChange={e => setDate(e.target.value)}
-                style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%' }}
-              />
+            <div onClick={() => setShowDatePicker(true)} style={{ position: 'relative', display: 'flex', alignItems: 'center', background: '#F3F4F6', borderRadius: 16, padding: '6px 12px', fontSize: 13, color: '#333', fontWeight: 500, cursor: 'pointer' }}>
+              <Calendar size={14} style={{ marginRight: 6, color: '#FFB800' }} />
+              <span>{formatDateCN(date)}</span>
             </div>
             <div onClick={() => adjustDate(1)} style={{ padding: 4 }}><ChevronRight size={16} color="#666" /></div>
           </div>
@@ -1095,6 +1106,14 @@ function AddTransaction() {
           </div>
         )
       }
+      <DatePickerModal
+        isOpen={showDatePicker}
+        onClose={() => setShowDatePicker(false)}
+        initialDate={date}
+        onSelect={(newDate) => setDate(newDate)}
+        enableTime={true}
+        title="选择时间"
+      />
     </div >
   )
 }

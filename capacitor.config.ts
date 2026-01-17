@@ -2,7 +2,7 @@ import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
     appId: 'com.quickbook.app',
-    appName: '快速记账',
+    appName: '智玺云簿',
     webDir: 'dist',
     server: {
         androidScheme: 'https'

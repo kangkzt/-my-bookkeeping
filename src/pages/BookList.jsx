@@ -1,45 +1,58 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Book, LogOut, User } from 'lucide-react'
+import { Plus, LogOut, BookOpen, Wallet, PiggyBank, CreditCard, TrendingUp } from 'lucide-react'
 import { getUserBooks, createBook, initGlobalDB } from '../db/global'
 import { initDB } from '../db/database'
 import { secureStorage } from '../utils/secureStorage'
 import { logger } from '../utils/logger'
 
+// 账本封面图标配置
+const BOOK_ICONS = [
+    { icon: BookOpen, color: '#4ECDC4', bg: 'linear-gradient(135deg, #4ECDC4 0%, #44A08D 100%)' },
+    { icon: Wallet, color: '#FF6B6B', bg: 'linear-gradient(135deg, #FF6B6B 0%, #EE5A24 100%)' },
+    { icon: PiggyBank, color: '#FFB800', bg: 'linear-gradient(135deg, #FFB800 0%, #FF9F43 100%)' },
+    { icon: CreditCard, color: '#667EEA', bg: 'linear-gradient(135deg, #667EEA 0%, #764BA2 100%)' },
+    { icon: TrendingUp, color: '#6C5CE7', bg: 'linear-gradient(135deg, #6C5CE7 0%, #A29BFE 100%)' },
+]
+
 function BookList() {
     const navigate = useNavigate()
     const [books, setBooks] = useState([])
     const [loading, setLoading] = useState(true)
-
-    const USER_ID = (() => {
-        const id = secureStorage.get('user_id') || secureStorage.migrateFromLocalStorage('user_id')
-        return id ? Number(id) : null
-    })()
+    const [userId, setUserId] = useState(null)
 
     useEffect(() => {
-        if (!USER_ID) {
-            navigate('/login')
-            return
+        const loadUserId = async () => {
+            const id = await secureStorage.get('user_id')
+            if (!id) {
+                navigate('/login')
+            } else {
+                setUserId(Number(id))
+            }
         }
-        loadBooks()
-    }, [USER_ID]) // Add USER_ID as dependency
+        loadUserId()
+    }, [])
+
+    useEffect(() => {
+        if (userId) {
+            loadBooks()
+        }
+    }, [userId])
 
     const handleLogout = () => {
         secureStorage.clear()
-        localStorage.clear() // 清理旧的 localStorage 数据
+        localStorage.clear()
         navigate('/login')
     }
 
     const loadBooks = async () => {
         try {
             await initGlobalDB()
-            let userBooks = await getUserBooks(USER_ID)
+            let userBooks = await getUserBooks(userId)
 
-            // If no books, create default one (Migration/First run support)
             if (userBooks.length === 0) {
-                // Link existing legacy data as "默认账本"
-                await createBook(USER_ID, '默认账本', 'QuickBookDB')
-                userBooks = await getUserBooks(USER_ID)
+                await createBook(userId, '默认账本', 'QuickBookDB')
+                userBooks = await getUserBooks(userId)
             }
             setBooks(userBooks)
         } catch (e) {
@@ -52,18 +65,11 @@ function BookList() {
 
     const handleOpenBook = async (book) => {
         try {
-            // Initialize the selected book's DB
             await initDB(book.dbName)
-            // Persist choice (Secure)
             secureStorage.set('current_book_id', book.id)
             secureStorage.set('current_book_name', book.name)
             secureStorage.set('current_db_name', book.dbName)
-            // Navigate Home
             navigate('/')
-            // We might need to reload window to ensure all components re-bind? 
-            // Or just initDB is enough if our stores use getDB() dynamically.
-            // Our stores import getDB from database.js. If initDB updates the singleton `db`, then subsequent getDB() calls get the new one.
-            // So navigation should be enough.
         } catch (e) {
             logger.error('打开账本失败:', e)
             alert('打开账本失败')
@@ -75,92 +81,223 @@ function BookList() {
         if (!name) return
 
         try {
-            await createBook(USER_ID, name)
+            await createBook(userId, name)
             loadBooks()
         } catch (e) {
             alert('创建失败: ' + e.message)
         }
     }
 
+    // 根据账本索引获取封面样式
+    const getBookStyle = (index) => {
+        return BOOK_ICONS[index % BOOK_ICONS.length]
+    }
+
     return (
         <div className="page book-list-page">
+            {/* 顶部区域 */}
             <div className="header">
-                <h1>我的账本</h1>
-                <button className="user-btn" onClick={handleLogout}><LogOut size={20} color="#666" /></button>
+                <div className="header-content">
+                    <h1>我的账本</h1>
+                    <p className="subtitle">选择一个账本开始记账</p>
+                </div>
+                <button className="logout-btn" onClick={handleLogout}>
+                    <LogOut size={20} />
+                </button>
             </div>
 
+            {/* 账本网格 */}
             <div className="book-grid">
-                {books.map(book => (
-                    <div key={book.id} className="book-card" onClick={() => handleOpenBook(book)}>
-                        <div className="book-cover">{book.cover}</div>
-                        <div className="book-info">
-                            <span className="book-name">{book.name}</span>
-                            <span className="book-date">{new Date(book.created_at).toLocaleDateString()}</span>
+                {books.map((book, index) => {
+                    const style = getBookStyle(index)
+                    const IconComponent = style.icon
+                    return (
+                        <div key={book.id} className="book-card" onClick={() => handleOpenBook(book)}>
+                            <div className="book-cover" style={{ background: style.bg }}>
+                                <div className="cover-pattern"></div>
+                                <IconComponent size={36} color="#fff" strokeWidth={1.5} />
+                            </div>
+                            <div className="book-info">
+                                <span className="book-name">{book.name}</span>
+                                <span className="book-date">{new Date(book.created_at).toLocaleDateString()}</span>
+                            </div>
                         </div>
-                    </div>
-                ))}
+                    )
+                })}
 
+                {/* 新建账本卡片 */}
                 <div className="book-card add-card" onClick={handleCreateBook}>
-                    <Plus size={32} color="#ccc" />
+                    <div className="add-icon">
+                        <Plus size={28} color="#bbb" strokeWidth={1.5} />
+                    </div>
                     <span className="add-text">新建账本</span>
                 </div>
             </div>
 
+            {/* 底部提示 */}
+            <div className="bottom-tip">
+                💡 每个账本独立存储，可用于不同场景的记账
+            </div>
+
             <style>{`
                 .book-list-page {
-                    background: #f5f6fa;
+                    background: linear-gradient(180deg, #f8f9fa 0%, #fff 100%);
                     min-height: 100vh;
                     padding: 20px;
+                    padding-top: calc(20px + env(safe-area-inset-top, 0));
                 }
+
                 .header {
-                    display: flex; justify-content: space-between; align-items: center;
-                    margin-bottom: 30px; padding-top: var(--safe-area-top);
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: flex-start;
+                    margin-bottom: 32px;
                 }
-                .header h1 { font-size: 24px; color: #333; }
-                
+
+                .header-content h1 {
+                    font-size: 28px;
+                    font-weight: 700;
+                    color: #1a1a1a;
+                    margin: 0 0 6px;
+                }
+
+                .subtitle {
+                    color: #888;
+                    font-size: 14px;
+                    margin: 0;
+                }
+
+                .logout-btn {
+                    width: 44px;
+                    height: 44px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    background: #fff;
+                    border: none;
+                    border-radius: 12px;
+                    color: #666;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+                    cursor: pointer;
+                    transition: all 0.2s;
+                }
+
+                .logout-btn:hover {
+                    background: #f5f5f5;
+                }
+
                 .book-grid {
                     display: grid;
-                    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-                    gap: 20px;
+                    grid-template-columns: repeat(2, 1fr);
+                    gap: 16px;
                 }
 
                 .book-card {
                     background: #fff;
-                    border-radius: 16px;
+                    border-radius: 20px;
                     padding: 20px;
                     display: flex;
                     flex-direction: column;
                     align-items: center;
-                    gap: 12px;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+                    gap: 16px;
+                    box-shadow: 0 4px 16px rgba(0,0,0,0.06);
                     cursor: pointer;
-                    transition: transform 0.1s;
+                    transition: all 0.2s ease;
+                    border: 1px solid rgba(0,0,0,0.03);
                 }
-                .book-card:active { transform: scale(0.98); }
+
+                .book-card:hover {
+                    transform: translateY(-4px);
+                    box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+                }
+
+                .book-card:active {
+                    transform: scale(0.98);
+                }
 
                 .book-cover {
-                    font-size: 48px;
-                    width: 80px; height: 100px;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    border-radius: 8px;
-                    display: flex; align-items: center; justify-content: center;
-                    color: #fff;
-                    box-shadow: 2px 4px 8px rgba(0,0,0,0.2);
+                    width: 80px;
+                    height: 80px;
+                    border-radius: 20px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    position: relative;
+                    overflow: hidden;
+                    box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+                }
+
+                .cover-pattern {
+                    position: absolute;
+                    top: -20px;
+                    right: -20px;
+                    width: 60px;
+                    height: 60px;
+                    background: rgba(255,255,255,0.15);
+                    border-radius: 50%;
                 }
 
                 .book-info {
-                    display: flex; flex-direction: column; align-items: center;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 4px;
                 }
-                .book-name { font-size: 15px; font-weight: 600; color: #333; }
-                .book-date { font-size: 11px; color: #999; margin-top: 4px; }
+
+                .book-name {
+                    font-size: 15px;
+                    font-weight: 600;
+                    color: #1a1a1a;
+                }
+
+                .book-date {
+                    font-size: 12px;
+                    color: #999;
+                }
 
                 .add-card {
-                    border: 2px dashed #ddd;
-                    background: none;
+                    background: transparent;
+                    border: 2px dashed #e0e0e0;
                     box-shadow: none;
                     justify-content: center;
+                    min-height: 160px;
                 }
-                .add-text { color: #999; font-size: 14px; }
+
+                .add-card:hover {
+                    border-color: #ccc;
+                    background: rgba(0,0,0,0.01);
+                    transform: none;
+                    box-shadow: none;
+                }
+
+                .add-icon {
+                    width: 56px;
+                    height: 56px;
+                    border-radius: 16px;
+                    background: #f5f5f5;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+
+                .add-text {
+                    color: #999;
+                    font-size: 14px;
+                    font-weight: 500;
+                }
+
+                .bottom-tip {
+                    position: fixed;
+                    bottom: 0;
+                    left: 0;
+                    right: 0;
+                    padding: 16px 20px;
+                    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0));
+                    background: linear-gradient(180deg, transparent 0%, #fff 20%);
+                    text-align: center;
+                    color: #aaa;
+                    font-size: 12px;
+                }
             `}</style>
         </div>
     )

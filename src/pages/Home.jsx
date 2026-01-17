@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useSwipeable } from 'react-swipeable'
 import {
   MessageCircle, Wallet, Users, Store, FolderKanban, Target,
@@ -9,16 +9,18 @@ import {
 } from 'lucide-react'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js'
 import { Doughnut } from 'react-chartjs-2'
-import { getMonthlyStats, getTransactionsByMonth, getAllCategories, getCategoryStats, getAllTransactions } from '../db/stores'
+import { getMonthlyStats, getTransactionsByMonth, getAllCategories, getCategoryStats, getTransactionsByDateRange, getGlobalStats } from '../db/stores'
 import { getDB } from '../db/database'
 import { SyncService } from '../services/SyncService'
 import { getCurrentUser, isSupabaseConfigured } from '../services/supabaseClient'
 import { logger } from '../utils/logger'
+import { EventEmitter, EVENTS } from '../utils/events'
 
 ChartJS.register(ArcElement, Tooltip, Legend)
 
 function Home() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [stats, setStats] = useState({
     today: { income: 0, expense: 0 },
     week: { income: 0, expense: 0 },
@@ -127,7 +129,10 @@ function Home() {
     }
   }
 
-  useEffect(() => { loadData() }, [year, month])
+  useEffect(() => {
+    loadData()
+    return EventEmitter.subscribe(EVENTS.TRANSACTION_UPDATED, loadData)
+  }, [year, month])
 
   const loadData = async () => {
     try {
@@ -174,57 +179,45 @@ function Home() {
       setBudgetData({ total: totalBudget, used: usedBudget, percent: budgetPercent })
 
       // 5. 时间维度统计 (今日、本周、本年)
-      // 需要获取全量/范围数据来计算
-      // 优化：本年数据量可能大，应考虑索引或专门的 store 方法。暂用全量过滤。
-      const allTrans = await getAllTransactions()
-
-      const todayString = new Date().toDateString()
       const now = new Date()
-      // Week calculation (ISO week or simple week starting Sunday/Monday?)
-      // Let's use simple logic: current week from Sunday.
+      const todayISO = now.toISOString().slice(0, 10)
+
       const msPerDay = 86400 * 1000
       const currentDay = now.getDay() // 0=Sun
       const weekStart = new Date(now.getTime() - currentDay * msPerDay)
       weekStart.setHours(0, 0, 0, 0)
+      const weekStartISO = weekStart.toISOString()
 
-      let d_today = { inc: 0, exp: 0 }
-      let d_week = { inc: 0, exp: 0 }
-      let d_year = { inc: 0, exp: 0 }
-      let d_all = { inc: 0, exp: 0 } // Add all-time accumulator
+      const yearStartISO = `${year}-01-01T00:00:00`
+      const yearEndISO = `${year}-12-31T23:59:59`
 
-      for (const t of allTrans) {
-        const tDate = new Date(t.date)
-        const amt = Number(t.amount)
+      // 并行获取多个维度的数据 (利用索引)
+      const [todayTrans, weekTrans, yearTrans] = await Promise.all([
+        getTransactionsByDateRange(`${todayISO}T00:00:00`, `${todayISO}T23:59:59`),
+        getTransactionsByDateRange(weekStartISO, now.toISOString()),
+        getTransactionsByDateRange(yearStartISO, yearEndISO)
+      ])
 
-        // Year Stats (Match View Year)
-        if (tDate.getFullYear() === year) {
-          if (t.type === 'income') d_year.inc += amt
-          if (t.type === 'expense') d_year.exp += amt
-        }
+      const sum = (list) => list.reduce((acc, t) => {
+        const amt = Number(t.amount || 0)
+        if (t.type === 'income') acc.inc += amt
+        else if (t.type === 'expense') acc.exp += amt
+        return acc
+      }, { inc: 0, exp: 0 })
 
-        // Today & Week (Always relative to Real Time "Now", not selected month)
-        // 用户通常希望首页的"今天"就是真的今天，而不是通过月份切换后的某一天。
-        if (tDate.toDateString() === todayString) {
-          if (t.type === 'income') d_today.inc += amt
-          if (t.type === 'expense') d_today.exp += amt
-        }
+      const d_today = sum(todayTrans)
+      const d_week = sum(weekTrans)
+      const d_year = sum(yearTrans)
 
-        if (tDate >= weekStart) {
-          if (t.type === 'income') d_week.inc += amt
-          if (t.type === 'expense') d_week.exp += amt
-        }
-
-        // All Time Stats
-        if (t.type === 'income') d_all.inc += amt
-        else if (t.type === 'expense') d_all.exp += amt
-      }
+      // 6. 累计数据 (All Time) - 使用缓存的全局统计 (高性能)
+      const d_all = await getGlobalStats()
 
       setStats({
         today: { income: d_today.inc, expense: d_today.exp },
         week: { income: d_week.inc, expense: d_week.exp },
         month: { income: monthStats.income, expense: monthStats.expense },
         year: { income: d_year.inc, expense: d_year.exp },
-        allTime: { income: d_all.inc, expense: d_all.exp }
+        allTime: { income: d_all.income, expense: d_all.expense }
       })
 
     } catch (error) {
@@ -265,12 +258,13 @@ function Home() {
         {icon}
       </div>
       <div>
-        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--expense)' }}>
-          {formatAmount(data.expense)}
-          <span style={{ fontSize: 9, color: '#999', marginLeft: 2 }}>支</span>
+        <div style={{ fontSize: 13, color: 'var(--income)', fontWeight: 700, fontFamily: 'DIN Alternate, sans-serif', display: 'flex', alignItems: 'baseline', gap: 2 }}>
+          {formatAmount(data.income)}
+          <span style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 400 }}>收</span>
         </div>
-        <div style={{ fontSize: 11, color: '#999', marginTop: 0, display: 'flex', alignItems: 'baseline' }}>
-          <span style={{ color: 'var(--income)', fontSize: 14, fontWeight: 600, marginRight: 2 }}>{formatAmount(data.income)}</span> 收
+        <div style={{ fontSize: 12, color: 'var(--expense)', fontWeight: 600, fontFamily: 'DIN Alternate, sans-serif', marginTop: 2, display: 'flex', alignItems: 'baseline', gap: 2 }}>
+          {formatAmount(data.expense)}
+          <span style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 400 }}>支</span>
         </div>
       </div>
     </div>
@@ -410,12 +404,12 @@ function Home() {
             {quickActions.map((action, index) => (
               <div key={index} onClick={() => navigate(action.path)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
                 <div style={{
-                  width: 52, height: 52, borderRadius: 18, backgroundColor: 'white', boxShadow: '0 4px 12px rgba(0,0,0,0.03)',
+                  width: 52, height: 52, borderRadius: 18, backgroundColor: 'var(--bg-card)', boxShadow: '0 4px 12px rgba(0,0,0,0.03)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', color: action.iconColor
                 }}>
                   <action.icon size={22} strokeWidth={2} />
                 </div>
-                <span style={{ fontSize: 11, color: '#666', fontWeight: 500 }}>{action.label}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 500 }}>{action.label}</span>
               </div>
             ))}
           </div>
@@ -435,17 +429,18 @@ function Home() {
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--expense)' }}>
-                    {formatAmount(stats.allTime?.expense || 0)}
-                    <span style={{ fontSize: 9, color: '#999', marginLeft: 2 }}>总支</span>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--income)', fontFamily: 'DIN Alternate, sans-serif' }}>
+                    {formatAmount(stats.allTime?.income || 0)}
+                    <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 4, fontWeight: 400 }}>总收</span>
                   </div>
-                  <div style={{ fontSize: 11, color: '#999', marginTop: 0 }}>
-                    <span style={{ color: 'var(--income)', fontSize: 14, fontWeight: 600, marginRight: 2 }}>{formatAmount(stats.allTime?.income || 0)}</span> 总收
+                  <div style={{ fontSize: 13, color: 'var(--expense)', fontWeight: 600, marginTop: 4, fontFamily: 'DIN Alternate, sans-serif' }}>
+                    {formatAmount(stats.allTime?.expense || 0)}
+                    <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 4, fontWeight: 400 }}>总支</span>
                   </div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 9, color: '#ccc' }}>结余</div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: (stats.allTime?.income - stats.allTime?.expense) >= 0 ? 'var(--income)' : 'var(--expense)' }}>
+                  <div style={{ fontSize: 9, color: 'var(--text-muted)', marginBottom: 2 }}>累计结余</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: (stats.allTime?.income - stats.allTime?.expense) >= 0 ? 'var(--income)' : 'var(--expense)', fontFamily: 'DIN Alternate, sans-serif' }}>
                     {formatAmount((stats.allTime?.income || 0) - (stats.allTime?.expense || 0))}
                   </div>
                 </div>
@@ -456,9 +451,9 @@ function Home() {
           {/* Expense Top 5 */}
           {expenseStats.stats.length > 0 && (
             <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
-              <div style={{ padding: '16px 20px', borderBottom: '1px solid #f5f5f5', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid rgba(0,0,0,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: 15, fontWeight: 700 }}>本月分类支出</span>
-                <span style={{ fontSize: 12, color: '#999' }}>TOP 5</span>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>TOP 5</span>
               </div>
               <div>
                 {expenseStats.stats.slice(0, 5).map((item, index) => (
@@ -473,13 +468,13 @@ function Home() {
                     </div>
                     <div style={{ flex: 1 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                        <span style={{ fontSize: 14, fontWeight: 600, color: '#333' }}>
+                        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
                           {item.category.name}
-                          {item.category.subName && <span style={{ fontSize: 11, color: '#999', fontWeight: 400 }}> · {item.category.subName}</span>}
+                          {item.category.subName && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}> · {item.category.subName}</span>}
                         </span>
                         <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'DIN Alternate' }}>¥{formatAmount(item.amount)}</span>
                       </div>
-                      <div style={{ height: 4, background: '#F1F5F9', borderRadius: 2, overflow: 'hidden' }}>
+                      <div style={{ height: 4, background: 'rgba(0,0,0,0.05)', borderRadius: 2, overflow: 'hidden' }}>
                         <div style={{ height: '100%', width: `${item.percentage}%`, background: 'var(--expense)', borderRadius: 2 }}></div>
                       </div>
                     </div>
@@ -491,9 +486,9 @@ function Home() {
 
           {/* Income Top 5 */}
           <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid #f5f5f5', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid rgba(0,0,0,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: 15, fontWeight: 700 }}>本月分类收入</span>
-              <span style={{ fontSize: 12, color: '#999' }}>TOP 5</span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>TOP 5</span>
             </div>
             <div>
               {incomeStats.stats.slice(0, 5).map((item, index) => (
@@ -501,26 +496,26 @@ function Home() {
                   onClick={() => navigate(`/records?range=month&categoryId=${item.categoryId}&year=${year}&month=${month}${item.category.subName ? `&subCategory=${encodeURIComponent(item.category.subName)}` : ''}`)}
                   style={{ display: 'flex', alignItems: 'center', padding: '14px 20px', borderBottom: index < 4 ? '1px solid #f9f9f9' : 'none', cursor: 'pointer' }}>
                   <div style={{
-                    width: 36, height: 36, borderRadius: 10, background: '#FEE2E2', color: '#EF4444',
+                    width: 36, height: 36, borderRadius: 10, background: '#FEE2E2', color: 'var(--income)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: 14
                   }}>
                     {getIconComponent(item.category.name, 18)}
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <span style={{ fontSize: 14, fontWeight: 600, color: '#333' }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
                         {item.category.name}
-                        {item.category.subName && <span style={{ fontSize: 11, color: '#999', fontWeight: 400 }}> · {item.category.subName}</span>}
+                        {item.category.subName && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}> · {item.category.subName}</span>}
                       </span>
-                      <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'DIN Alternate', color: '#EF4444' }}>+¥{formatAmount(item.amount)}</span>
+                      <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'DIN Alternate', color: 'var(--income)' }}>+¥{formatAmount(item.amount)}</span>
                     </div>
-                    <div style={{ height: 4, background: '#F1F5F9', borderRadius: 2, overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${item.percentage}%`, background: '#EF4444', borderRadius: 2 }}></div>
+                    <div style={{ height: 4, background: 'rgba(0,0,0,0.05)', borderRadius: 2, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${item.percentage}%`, background: 'var(--income)', borderRadius: 2 }}></div>
                     </div>
                   </div>
                 </div>
               ))}
-              {incomeStats.stats.length === 0 && <div style={{ padding: 40, textAlign: 'center', color: '#999', fontSize: 14 }}>本月暂无分类收入</div>}
+              {incomeStats.stats.length === 0 && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>本月暂无分类收入</div>}
             </div>
           </div>
 
@@ -554,7 +549,7 @@ function Home() {
                         {item.category.name}
                         {item.category.subName && <span style={{ fontSize: 10, opacity: 0.6 }}> · {item.category.subName}</span>}
                       </span>
-                      <span style={{ fontSize: 12, color: '#333', fontWeight: 600 }}>{(item.percentage || 0).toFixed(1)}%</span>
+                      <span style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 600 }}>{(item.percentage || 0).toFixed(1)}%</span>
                     </div>
                   ))}
                 </div>
@@ -586,18 +581,18 @@ function Home() {
                 <div style={{ flex: 1 }}>
                   {incomeStats.stats.slice(0, 4).map((item, i) => (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                      <div style={{ width: 10, height: 10, borderRadius: '50%', background: ['#EF4444', '#F87171', '#FCA5A5', '#FECACA'][i] }}></div>
+                      <div style={{ width: 10, height: 10, borderRadius: '50%', background: ['var(--income)', '#F87171', '#FCA5A5', '#FECACA'][i] }}></div>
                       <span style={{ fontSize: 12, color: '#666', flex: 1 }}>
                         {item.category.name}
                         {item.category.subName && <span style={{ fontSize: 10, opacity: 0.6 }}> · {item.category.subName}</span>}
                       </span>
-                      <span style={{ fontSize: 12, color: '#333', fontWeight: 600 }}>{(item.percentage || 0).toFixed(1)}%</span>
+                      <span style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 600 }}>{(item.percentage || 0).toFixed(1)}%</span>
                     </div>
                   ))}
                 </div>
               </div>
             ) : (
-              <div style={{ padding: '20px 0', textAlign: 'center', color: '#999', fontSize: 14 }}>本月暂无收入数据</div>
+              <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>本月暂无收入数据</div>
             )}
           </div>
 
