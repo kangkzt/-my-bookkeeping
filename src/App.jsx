@@ -1,29 +1,51 @@
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, lazy, Suspense } from 'react'
 import Home from './pages/Home'
-import Records from './pages/Records'
-import Statistics from './pages/Statistics'
-import Settings from './pages/Settings'
-import AddTransaction from './pages/AddTransaction'
-import Accounts from './pages/Accounts'
-import Budget from './pages/Budget'
-import Projects from './pages/Projects'
-import CalendarView from './pages/CalendarView'
-import Members from './pages/Members'
-import CategoryTags from './pages/CategoryTags'
-import CategoryManage from './pages/CategoryManage'
-import Recurring from './pages/Recurring'
-import Merchants from './pages/Merchants'
-import Templates from './pages/Templates'
-import ImportData from './pages/ImportData'
-import BookkeepingSettings from './pages/BookkeepingSettings'
-import BookList from './pages/BookList'
-import Login from './pages/Login'
 import Navigation from './components/Navigation'
 import { initDB, getDB } from './db/database'
 import { addTransaction } from './db/stores'
 import { secureStorage } from './utils/secureStorage'
 import { logger } from './utils/logger'
+
+// Lazy load larger pages for code splitting
+const Records = lazy(() => import('./pages/Records'))
+const Statistics = lazy(() => import('./pages/Statistics'))
+const Settings = lazy(() => import('./pages/Settings'))
+const AddTransaction = lazy(() => import('./pages/AddTransaction'))
+const Accounts = lazy(() => import('./pages/Accounts'))
+const Budget = lazy(() => import('./pages/Budget'))
+const Projects = lazy(() => import('./pages/Projects'))
+const CalendarView = lazy(() => import('./pages/CalendarView'))
+const Members = lazy(() => import('./pages/Members'))
+const CategoryTags = lazy(() => import('./pages/CategoryTags'))
+const CategoryManage = lazy(() => import('./pages/CategoryManage'))
+const Recurring = lazy(() => import('./pages/Recurring'))
+const Merchants = lazy(() => import('./pages/Merchants'))
+const Templates = lazy(() => import('./pages/Templates'))
+const ImportData = lazy(() => import('./pages/ImportData'))
+const BookkeepingSettings = lazy(() => import('./pages/BookkeepingSettings'))
+const BookList = lazy(() => import('./pages/BookList'))
+const Login = lazy(() => import('./pages/Login'))
+
+// Loading fallback component
+const PageLoader = () => (
+    <div style={{
+        height: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#f5f6fa'
+    }}>
+        <div style={{
+            width: 32,
+            height: 32,
+            border: '3px solid #eee',
+            borderTopColor: '#FFB800',
+            borderRadius: '50%',
+            animation: 'spin 1s linear infinite'
+        }} />
+    </div>
+)
 
 function App() {
     const navigate = useNavigate()
@@ -33,9 +55,9 @@ function App() {
 
     useEffect(() => {
         const init = async () => {
-            // 优先从 secureStorage 获取，兼容从 localStorage 迁移
-            const userId = secureStorage.get('user_id') || secureStorage.migrateFromLocalStorage('user_id')
-            const dbName = secureStorage.get('current_db_name') || secureStorage.migrateFromLocalStorage('current_db_name')
+            // 优先从 secureStorage 获取 (异步API)
+            const userId = await secureStorage.get('user_id')
+            const dbName = await secureStorage.get('current_db_name')
             const isPublicRoute = ['/login'].includes(location.pathname)
             const isBookList = location.pathname === '/books'
 
@@ -48,7 +70,6 @@ function App() {
                     return
                 } else {
                     // 其他页面重定向到登录
-                    // setLoading(false) // 保持 Loading 状态直到跳转完成
                     return navigate('/login')
                 }
             }
@@ -178,32 +199,34 @@ function App() {
         )
     }
 
-    const showNav = ['/', '/records', '/statistics', '/calendar', '/settings'].includes(location.pathname)
+    const showNav = ['/records', '/statistics', '/calendar', '/settings'].includes(location.pathname)
 
     return (
         <div className="app">
-            <Routes>
-                <Route path="/" element={<Home />} />
-                <Route path="/records" element={<Records />} />
-                <Route path="/statistics" element={<Statistics />} />
-                <Route path="/settings" element={<Settings />} />
-                <Route path="/settings/bookkeeping" element={<BookkeepingSettings />} />
-                <Route path="/recurring" element={<Recurring />} />
-                <Route path="/add" element={<AddTransaction />} />
-                <Route path="/add/:type" element={<AddTransaction />} />
-                <Route path="/accounts" element={<Accounts />} />
-                <Route path="/budget" element={<Budget />} />
-                <Route path="/projects" element={<Projects />} />
-                <Route path="/calendar" element={<CalendarView />} />
-                <Route path="/members" element={<Members />} />
-                <Route path="/category-tags" element={<CategoryTags />} />
-                <Route path="/category-manage" element={<CategoryManage />} />
-                <Route path="/merchants" element={<Merchants />} />
-                <Route path="/templates" element={<Templates />} />
-                <Route path="/import" element={<ImportData />} />
-                <Route path="/login" element={<Login />} />
-                <Route path="/books" element={<BookList />} />
-            </Routes>
+            <Suspense fallback={<PageLoader />}>
+                <Routes>
+                    <Route path="/" element={<Records />} />
+                    <Route path="/records" element={<Records />} />
+                    <Route path="/statistics" element={<Statistics />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="/settings/bookkeeping" element={<BookkeepingSettings />} />
+                    <Route path="/recurring" element={<Recurring />} />
+                    <Route path="/add" element={<AddTransaction />} />
+                    <Route path="/add/:type" element={<AddTransaction />} />
+                    <Route path="/accounts" element={<Accounts />} />
+                    <Route path="/budget" element={<Budget />} />
+                    <Route path="/projects" element={<Projects />} />
+                    <Route path="/calendar" element={<CalendarView />} />
+                    <Route path="/members" element={<Members />} />
+                    <Route path="/category-tags" element={<CategoryTags />} />
+                    <Route path="/category-manage" element={<CategoryManage />} />
+                    <Route path="/merchants" element={<Merchants />} />
+                    <Route path="/templates" element={<Templates />} />
+                    <Route path="/import" element={<ImportData />} />
+                    <Route path="/login" element={<Login />} />
+                    <Route path="/books" element={<BookList />} />
+                </Routes>
+            </Suspense>
             {showNav && <Navigation />}
         </div>
     )

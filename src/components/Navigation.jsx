@@ -1,14 +1,14 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Home, List, BarChart2, Plus, Settings } from 'lucide-react'
+import { List, BarChart2, Plus, Calendar, Settings } from 'lucide-react'
 
 function Navigation() {
     const navigate = useNavigate()
 
     const navItems = [
-        { path: '/', icon: Home, label: '首页' },
         { path: '/records', icon: List, label: '流水' },
         { action: 'add', icon: Plus, label: '', isCenter: true },
         { path: '/statistics', icon: BarChart2, label: '报表' },
+        { path: '/calendar', icon: Calendar, label: '日历' },
         { path: '/settings', icon: Settings, label: '设置' }
     ]
 
@@ -40,3 +40,4 @@ function Navigation() {
 }
 
 export default Navigation
+

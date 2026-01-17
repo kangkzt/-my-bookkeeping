@@ -263,15 +263,12 @@ function Settings() {
     }
   }
 
-  // 功能列表
+  // 功能列表 (保留核心功能)
   const features = [
     { icon: SettingsIcon, label: '记账设置', desc: '默认账户、提醒等', path: '/settings/bookkeeping' },
     { icon: LayoutGrid, label: '分类标签', desc: '管理收支分类', path: '/category-tags' },
     { icon: Users, label: '商家管理', desc: '管理常用商家', path: '/merchants' },
     { icon: Calendar, label: '周期记账', desc: '定期自动记账', path: '/recurring' },
-    { icon: FileText, label: '流水管理', desc: '查看所有记录', path: '/records' },
-    { icon: BarChart3, label: '报表分析', desc: '收支统计图表', path: '/statistics' },
-    { icon: Target, label: '预算中心', desc: '设置月度预算', path: '/budget' },
     { icon: CreditCard, label: '账户管理', desc: '银行卡、现金等', path: '/accounts' },
   ]
 
@@ -304,15 +301,6 @@ function Settings() {
       <div className="book-name-section">
         <h1 className="book-name">{bookName}</h1>
         <div style={{ fontSize: 13, color: '#999', marginTop: 4 }}>当前用户: {username}</div>
-      </div>
-
-      {/* 会员卡片区域 */}
-      <div className="member-card">
-        <div className="member-info">
-          <span className="member-icon">🍌</span>
-          <span className="member-label">记账积分</span>
-          <span className="member-points">128</span>
-        </div>
       </div>
 
       {/* Sync Section */}
@@ -408,57 +396,6 @@ function Settings() {
               <ChevronRight size={18} color="#ccc" />
             </div>
           ))}
-        </div>
-      </div>
-
-      {/* 功能卡片区域 */}
-      <div className="feature-cards">
-        <div className="feature-card" onClick={() => navigate('/members')}>
-          <div className="card-top">
-            <div className="avatars">
-              <span className="avatar">👨</span>
-              <span className="avatar">👩</span>
-              <span className="avatar add">+</span>
-            </div>
-          </div>
-          <div className="card-label">成员与角色管理</div>
-        </div>
-
-        <div className="feature-card">
-          <div className="card-top">
-            <div className="storage-info">
-              <span className="storage-text">本地存储</span>
-              <div className="storage-bar">
-                <div className="storage-fill" style={{ width: '30%' }}></div>
-              </div>
-            </div>
-          </div>
-          <div className="card-label">我的空间</div>
-        </div>
-      </div>
-
-      {/* 快捷功能 */}
-      <div className="quick-features">
-        <div className="quick-item" onClick={() => navigate('/records')}>
-          <div className="quick-icon">
-            <Trash2 size={20} />
-          </div>
-          <div className="quick-info">
-            <span className="quick-label">流水回收站</span>
-            <span className="quick-desc">可恢复历史删除流水</span>
-          </div>
-          <span className="quick-badge">限免中</span>
-        </div>
-
-        <div className="quick-item">
-          <div className="quick-icon">
-            <Lock size={20} />
-          </div>
-          <div className="quick-info">
-            <span className="quick-label">封账</span>
-            <span className="quick-desc">封账后流水不可修改</span>
-          </div>
-          <span className="quick-badge">限免中</span>
         </div>
       </div>
 

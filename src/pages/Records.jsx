@@ -268,6 +268,55 @@ function Records() {
   // 排序日期
   const sortedDates = Object.keys(groupedTransactions).sort((a, b) => new Date(b) - new Date(a))
 
+  // 按月份分组 (用于年度视图)
+  const groupedByMonth = transactions.reduce((groups, trans) => {
+    const date = trans.date ? trans.date.slice(0, 7) : 'Unknown' // YYYY-MM
+    if (!groups[date]) groups[date] = []
+    groups[date].push(trans)
+    return groups
+  }, {})
+
+  // 排序月份
+  const sortedMonths = Object.keys(groupedByMonth).sort((a, b) => new Date(b) - new Date(a))
+
+  // 折叠状态 (按月份)
+  const [collapsedMonths, setCollapsedMonths] = useState({})
+  const toggleMonthCollapse = (monthKey) => {
+    setCollapsedMonths(prev => ({ ...prev, [monthKey]: !prev[monthKey] }))
+  }
+
+  // 获取季度 (1-4)
+  const getQuarter = (month) => Math.ceil(month / 3)
+  const getQuarterMonths = (quarter) => {
+    const startMonth = (quarter - 1) * 3 + 1
+    return [startMonth, startMonth + 1, startMonth + 2]
+  }
+
+  // 按季度分组
+  const groupedByQuarter = transactions.reduce((groups, trans) => {
+    if (!trans.date) return groups
+    const month = parseInt(trans.date.slice(5, 7))
+    const y = trans.date.slice(0, 4)
+    const q = getQuarter(month)
+    const key = `${y}-Q${q}`
+    if (!groups[key]) groups[key] = []
+    groups[key].push(trans)
+    return groups
+  }, {})
+
+  // 排序季度
+  const sortedQuarters = Object.keys(groupedByQuarter).sort((a, b) => {
+    const [yA, qA] = a.split('-Q')
+    const [yB, qB] = b.split('-Q')
+    return yB - yA || qB - qA
+  })
+
+  // 折叠状态 (按季度)
+  const [collapsedQuarters, setCollapsedQuarters] = useState({})
+  const toggleQuarterCollapse = (quarterKey) => {
+    setCollapsedQuarters(prev => ({ ...prev, [quarterKey]: !prev[quarterKey] }))
+  }
+
   // Search Filtering
   const filterByKeyword = (trans) => {
     if (!searchKeyword.trim()) return true
@@ -370,6 +419,88 @@ function Records() {
   // 计算汇总
   const totalIncome = transactions.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
   const totalExpense = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
+
+  // 渲染单条交易
+  const renderTransactionItem = (trans) => {
+    const category = getCategory(trans.categoryId)
+    const isSelected = selectedIds.has(trans.id)
+
+    return (
+      <div
+        key={trans.id}
+        className={`record-item ${isSelectionMode && isSelected ? 'selected' : ''}`}
+        onClick={() => {
+          if (isSelectionMode) {
+            toggleSelection(trans.id)
+          } else {
+            handleEdit(trans.id)
+          }
+        }}
+      >
+        {isSelectionMode && (
+          <div className="selection-checkbox">
+            {isSelected ? <Check size={16} color="white" /> : null}
+          </div>
+        )}
+
+        <div className="category-icon" style={{ backgroundColor: '#fff' }}>
+          <span style={{ fontSize: '24px' }}>{category.icon}</span>
+        </div>
+
+        <div className="record-content">
+          <div className="record-main">
+            <span className="category-name">
+              {category.name}
+              {trans.subCategory && <span style={{ color: '#999', fontWeight: 400 }}> · {trans.subCategory}</span>}
+            </span>
+            <span className={`amount ${trans.type}`}>
+              {formatAmount(trans.amount)}
+            </span>
+          </div>
+          <div className="record-sub">
+            <div className="sub-left">
+              {trans.remark && <span className="remark">{trans.remark}</span>}
+
+              {trans.photos && trans.photos.length > 0 && (
+                <div className="record-photos" style={{ display: 'flex', gap: 4, margin: '4px 0', overflowX: 'auto' }}>
+                  {trans.photos.map(p => (
+                    <img key={p.id} src={p.data} alt="img" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, border: '1px solid #eee' }} />
+                  ))}
+                </div>
+              )}
+
+              <div className="meta-info">
+                <span>{accounts.find(a => a.id === trans.accountId)?.name || '现金'}</span>
+                <span> · </span>
+                <span>{persons.find(p => p.id === trans.personId)?.name || '我'}</span>
+                <span> · </span>
+                <span>{trans.date.split('T')[1]}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {!isSelectionMode && (
+          <button
+            className="delete-btn"
+            onClick={(e) => { e.stopPropagation(); handleDelete(trans.id); }}
+            style={{
+              background: '#ff4d4f',
+              color: '#fff',
+              border: 'none',
+              padding: '8px 16px',
+              borderRadius: 4,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4
+            }}
+          >
+            <Trash2 size={16} color="#fff" />
+          </button>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="page records-page" {...handlers}>
@@ -680,125 +811,193 @@ function Records() {
 
       {/* 列表内容 */}
       <div className="records-list">
-        {/* 月度汇总头 */}
-        <div className="month-summary-header" onClick={() => setIsCollapsed(!isCollapsed)} style={{ cursor: 'pointer' }}>
-          <div className="month-date">
-            <span className="month-val">{month}月</span>
-            <span className="year-val">{year}</span>
-          </div>
-          <div className="month-stats">
-            <div className="stats-row">
-              <span className="label">结余</span>
-              <span className="val">{formatAmount(totalIncome - totalExpense)}</span>
-              <div className="arrow-box" style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
-                <ChevronDown size={12} color="#999" />
-              </div>
-            </div>
-            <div className="stats-detail">
-              <span>收入 {formatAmount(totalIncome)}</span>
-              <span className="divider">|</span>
-              <span>支出 {formatAmount(totalExpense)}</span>
-            </div>
-          </div>
-        </div>
+        {/* 年度视图: 按月分组 */}
+        {range === 'year' ? (
+          sortedMonths.map(monthKey => {
+            const monthTrans = groupedByMonth[monthKey]
+            const [y, m] = monthKey.split('-')
+            const monthIncome = monthTrans.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
+            const monthExpense = monthTrans.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
+            const isMonthCollapsed = collapsedMonths[monthKey]
 
-        {!isCollapsed && displayDates.map(date => {
-          const dayTransactions = groupedTransactions[date].filter(filterByKeyword)
-          const weekDay = new Date(date).getDay()
-          const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-          // 仅在列表项中不再重复日汇总，因为随手记风格通常是简化日头
+            // 该月的日期分组
+            const monthDates = Object.keys(groupedTransactions)
+              .filter(d => d.startsWith(monthKey))
+              .sort((a, b) => new Date(b) - new Date(a))
 
-          return (
-            <div key={date} className="day-group">
-              <div className="day-simple-header">
-                <span>{date.split('-')[1]}月{date.split('-')[2]}日 {weekDays[weekDay]}</span>
-              </div>
-              {dayTransactions.map(trans => {
-                const category = getCategory(trans.categoryId)
-                const isSelected = selectedIds.has(trans.id)
-                const isSwiped = swipedItemId === trans.id
-
-                return (
-                  <div
-                    key={trans.id}
-                    className={`record-item ${isSelectionMode && isSelected ? 'selected' : ''}`}
-                    onClick={() => {
-                      if (isSelectionMode) {
-                        toggleSelection(trans.id)
-                      } else {
-                        handleEdit(trans.id)
-                      }
-                    }}
-                  >
-                    {isSelectionMode && (
-                      <div className="selection-checkbox">
-                        {isSelected ? <Check size={16} color="white" /> : null}
+            return (
+              <div key={monthKey} className="month-section">
+                {/* 月度汇总头 */}
+                <div className="month-summary-header" onClick={() => toggleMonthCollapse(monthKey)} style={{ cursor: 'pointer' }}>
+                  <div className="month-date">
+                    <span className="month-val">{parseInt(m)}月</span>
+                    <span className="year-val">{y}</span>
+                  </div>
+                  <div className="month-stats">
+                    <div className="stats-row">
+                      <span className="label">结余</span>
+                      <span className="val">{formatAmount(monthIncome - monthExpense)}</span>
+                      <div className="arrow-box" style={{ transform: isMonthCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+                        <ChevronDown size={12} color="#999" />
                       </div>
-                    )}
-
-                    <div className="category-icon" style={{ backgroundColor: '#fff' }}>
-                      {/* 这里的Icon应该用分类色，但背景用白色或淡色，随手记风格图标是彩色的 */}
-                      <span style={{ fontSize: '24px' }}>{category.icon}</span>
                     </div>
+                    <div className="stats-detail">
+                      <span>收入 {formatAmount(monthIncome)}</span>
+                      <span className="divider">|</span>
+                      <span>支出 {formatAmount(monthExpense)}</span>
+                    </div>
+                  </div>
+                </div>
 
-                    <div className="record-content">
-                      <div className="record-main">
-                        <span className="category-name">
-                          {category.name}
-                          {trans.subCategory && <span style={{ color: '#999', fontWeight: 400 }}> · {trans.subCategory}</span>}
-                        </span>
-                        <span className={`amount ${trans.type}`}>
-                          {formatAmount(trans.amount)}
-                        </span>
+                {/* 月内日期列表 */}
+                {!isMonthCollapsed && monthDates.map(date => {
+                  const dayTransactions = groupedTransactions[date].filter(filterByKeyword)
+                  if (dayTransactions.length === 0) return null
+                  const weekDay = new Date(date).getDay()
+                  const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+
+                  return (
+                    <div key={date} className="day-group">
+                      <div className="day-simple-header">
+                        <span>{date.split('-')[1]}月{date.split('-')[2]}日 {weekDays[weekDay]}</span>
                       </div>
-                      <div className="record-sub">
-                        <div className="sub-left">
-                          {trans.remark && <span className="remark">{trans.remark}</span>}
+                      {dayTransactions.map(trans => renderTransactionItem(trans))}
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })
+        ) : range === 'quarter' ? (
+          /* 季度视图: 按季度分组，内含月份 */
+          sortedQuarters.map(quarterKey => {
+            const quarterTrans = groupedByQuarter[quarterKey]
+            const [y, q] = quarterKey.split('-Q')
+            const quarterIncome = quarterTrans.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
+            const quarterExpense = quarterTrans.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
+            const isQuarterCollapsed = collapsedQuarters[quarterKey]
+            const quarterLabel = ['', '一', '二', '三', '四'][parseInt(q)]
 
-                          {/* Photos Thumbnail List */}
-                          {trans.photos && trans.photos.length > 0 && (
-                            <div className="record-photos" style={{ display: 'flex', gap: 4, margin: '4px 0', overflowX: 'auto' }}>
-                              {trans.photos.map(p => (
-                                <img key={p.id} src={p.data} alt="img" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, border: '1px solid #eee' }} />
-                              ))}
+            // 该季度包含的月份
+            const quarterMonthKeys = sortedMonths.filter(mk => {
+              const [my, mm] = mk.split('-')
+              return my === y && getQuarter(parseInt(mm)) === parseInt(q)
+            })
+
+            return (
+              <div key={quarterKey} className="quarter-section">
+                {/* 季度汇总头 */}
+                <div className="month-summary-header" onClick={() => toggleQuarterCollapse(quarterKey)} style={{ cursor: 'pointer', background: '#e8f4ff' }}>
+                  <div className="month-date">
+                    <span className="month-val">第{quarterLabel}季度</span>
+                    <span className="year-val">{y}</span>
+                  </div>
+                  <div className="month-stats">
+                    <div className="stats-row">
+                      <span className="label">结余</span>
+                      <span className="val">{formatAmount(quarterIncome - quarterExpense)}</span>
+                      <div className="arrow-box" style={{ transform: isQuarterCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+                        <ChevronDown size={12} color="#999" />
+                      </div>
+                    </div>
+                    <div className="stats-detail">
+                      <span>收入 {formatAmount(quarterIncome)}</span>
+                      <span className="divider">|</span>
+                      <span>支出 {formatAmount(quarterExpense)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 季度内月份列表 */}
+                {!isQuarterCollapsed && quarterMonthKeys.map(monthKey => {
+                  const monthTrans = groupedByMonth[monthKey] || []
+                  const [, m] = monthKey.split('-')
+                  const monthIncome = monthTrans.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
+                  const monthExpense = monthTrans.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
+                  const isMonthCollapsed = collapsedMonths[monthKey]
+
+                  const monthDates = Object.keys(groupedTransactions)
+                    .filter(d => d.startsWith(monthKey))
+                    .sort((a, b) => new Date(b) - new Date(a))
+
+                  return (
+                    <div key={monthKey} className="month-section" style={{ marginLeft: 8, borderLeft: '2px solid #ddd' }}>
+                      <div className="month-summary-header" onClick={() => toggleMonthCollapse(monthKey)} style={{ cursor: 'pointer', paddingLeft: 16 }}>
+                        <div className="month-date">
+                          <span className="month-val">{parseInt(m)}月</span>
+                        </div>
+                        <div className="month-stats">
+                          <div className="stats-row">
+                            <span className="val" style={{ fontSize: 14 }}>{formatAmount(monthIncome - monthExpense)}</span>
+                            <div className="arrow-box" style={{ transform: isMonthCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+                              <ChevronDown size={12} color="#999" />
                             </div>
-                          )}
-
-                          <div className="meta-info">
-                            <span>{accounts.find(a => a.id === trans.accountId)?.name || '现金'}</span>
-                            <span> · </span>
-                            <span>{persons.find(p => p.id === trans.personId)?.name || '我'}</span>
-                            <span> · </span>
-                            <span>{trans.date.split('T')[1]}</span>
                           </div>
                         </div>
                       </div>
-                    </div>
 
-                    {!isSelectionMode && (
-                      <button
-                        className="delete-btn"
-                        onClick={(e) => { e.stopPropagation(); handleDelete(trans.id); }}
-                        style={{
-                          background: '#ff4d4f',
-                          color: '#fff',
-                          border: 'none',
-                          padding: '8px 16px',
-                          borderRadius: 4,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 4
-                        }}
-                      >
-                        <Trash2 size={16} color="#fff" />
-                      </button>
-                    )}
+                      {!isMonthCollapsed && monthDates.map(date => {
+                        const dayTransactions = groupedTransactions[date].filter(filterByKeyword)
+                        if (dayTransactions.length === 0) return null
+                        const weekDay = new Date(date).getDay()
+                        const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+
+                        return (
+                          <div key={date} className="day-group">
+                            <div className="day-simple-header">
+                              <span>{date.split('-')[1]}月{date.split('-')[2]}日 {weekDays[weekDay]}</span>
+                            </div>
+                            {dayTransactions.map(trans => renderTransactionItem(trans))}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })
+        ) : (
+          /* 非年度视图: 保持原有逻辑 */
+          <>
+            {/* 单月汇总头 */}
+            <div className="month-summary-header" onClick={() => setIsCollapsed(!isCollapsed)} style={{ cursor: 'pointer' }}>
+              <div className="month-date">
+                <span className="month-val">{month}月</span>
+                <span className="year-val">{year}</span>
+              </div>
+              <div className="month-stats">
+                <div className="stats-row">
+                  <span className="label">结余</span>
+                  <span className="val">{formatAmount(totalIncome - totalExpense)}</span>
+                  <div className="arrow-box" style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+                    <ChevronDown size={12} color="#999" />
                   </div>
-                )
-              })}
+                </div>
+                <div className="stats-detail">
+                  <span>收入 {formatAmount(totalIncome)}</span>
+                  <span className="divider">|</span>
+                  <span>支出 {formatAmount(totalExpense)}</span>
+                </div>
+              </div>
             </div>
-          )
-        })}
+
+            {!isCollapsed && displayDates.map(date => {
+              const dayTransactions = groupedTransactions[date].filter(filterByKeyword)
+              const weekDay = new Date(date).getDay()
+              const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+
+              return (
+                <div key={date} className="day-group">
+                  <div className="day-simple-header">
+                    <span>{date.split('-')[1]}月{date.split('-')[2]}日 {weekDays[weekDay]}</span>
+                  </div>
+                  {dayTransactions.map(trans => renderTransactionItem(trans))}
+                </div>
+              )
+            })}
+          </>
+        )}
 
         {transactions.length === 0 && (
           <div className="empty-state">

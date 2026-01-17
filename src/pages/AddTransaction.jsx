@@ -11,17 +11,10 @@ import { recognizeReceipt } from '../utils/ocr'
 import { parseVoiceInput } from '../utils/nlp'
 import './AddTransaction.css'
 
-// Add CSS for pulse
-const style = document.createElement('style');
-style.innerHTML = `
-  @keyframes pulse {
-    0% { transform: scale(1); }
-    50% { transform: scale(1.1); }
-    100% { transform: scale(1); }
-  }
-  .pulse-anim { animation: pulse 1s infinite; }
-`;
-document.head.appendChild(style);
+// Constants for timeouts
+const VOICE_PARSE_DELAY_MS = 1000
+const PROCESSING_TIMEOUT_MS = 5000
+
 
 const formatDateCN = (isoStr) => {
   if (!isoStr) return ''
@@ -82,12 +75,25 @@ function AddTransaction() {
   const [webRecognition, setWebRecognition] = useState(null)
   const fileInputRef = useRef(null)
 
-  // Combined Photos Helper
-  const allPhotos = useMemo(() => {
+  // Combined Photos Helper with proper URL cleanup
+  const [allPhotos, setAllPhotos] = useState([])
+
+  useEffect(() => {
     const saved = savedPhotos.map(p => ({ ...p, isNew: false, url: p.data }))
-    const newFiles = photoFiles.map(f => ({ file: f, isNew: true, url: URL.createObjectURL(f) }))
-    return [...saved, ...newFiles]
+    const newUrls = []
+    const newFiles = photoFiles.map(f => {
+      const url = URL.createObjectURL(f)
+      newUrls.push(url)
+      return { file: f, isNew: true, url }
+    })
+    setAllPhotos([...saved, ...newFiles])
+
+    // Cleanup: Revoke URLs when component unmounts or files change
+    return () => {
+      newUrls.forEach(url => URL.revokeObjectURL(url))
+    }
   }, [savedPhotos, photoFiles])
+
 
   /* Camera Handlers */
   const handleCameraClick = () => {
