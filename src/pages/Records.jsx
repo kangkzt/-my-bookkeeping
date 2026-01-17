@@ -1,18 +1,20 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ChevronLeft, Calendar, CheckSquare, Search, Plus, Filter,
-  Trash2, Tag, Users, X, Check, MoreHorizontal, ChevronDown, ListFilter
+  Trash2, Tag, Users, X, Check, MoreHorizontal, ChevronDown, ListFilter, ChevronRight
 } from 'lucide-react'
 import {
   getTransactionsByMonth, getTransactionsByDateRange, getAllCategories, deleteTransaction,
-  deleteTransactions, updateTransactions, getAllTags, getAllPersons
+  deleteTransactions, updateTransactions, getAllTags, getAllPersons, getAllAccounts, getPhotosByTransactionId,
+  getAllProjects, getAllMerchants
 } from '../db/stores'
 import { useSwipeable } from 'react-swipeable'
+import DatePickerModal from '../components/DatePickerModal'
 
 function Records() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const range = searchParams.get('range') || 'month' // today, week, month, year
 
   const handlers = useSwipeable({
@@ -25,14 +27,23 @@ function Records() {
 
   // 状态管理
   const dateParam = searchParams.get('date')
-  // 如果 URL 有日期参数，使用该日期；否则默认为今天
-  const currentDate = dateParam ? new Date(dateParam) : new Date()
+  const yearParam = searchParams.get('year')
+  const monthParam = searchParams.get('month')
+
+  // 如果 URL 有 year/month 参数，优先使用；否则检查 date 参数；否则默认为今天
+  // 如果 URL 有 year/month 参数，优先使用；如果只有 year，则设为该年1月1日；否则检查 date 参数；否则默认为今天
+  const currentDate = (yearParam && monthParam)
+    ? new Date(Number(yearParam), Number(monthParam) - 1, 1)
+    : (yearParam ? new Date(Number(yearParam), 0, 1) : (dateParam ? new Date(dateParam) : new Date()))
   const [transactions, setTransactions] = useState([])
   const [categories, setCategories] = useState([])
   const [isSelectionMode, setIsSelectionMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [tags, setTags] = useState([])
   const [persons, setPersons] = useState([])
+  const [accounts, setAccounts] = useState([])
+  const [projects, setProjects] = useState([])
+  const [merchants, setMerchants] = useState([])
 
   // 筛选器状态
   const [activeFilter, setActiveFilter] = useState(null)
@@ -43,18 +54,93 @@ function Records() {
   const [showTagModal, setShowTagModal] = useState(false)
   const [showPersonModal, setShowPersonModal] = useState(false)
 
+  // Filter Modals
+  const [showCategoryFilter, setShowCategoryFilter] = useState(false)
+  const [showAccountFilter, setShowAccountFilter] = useState(false)
+  const [showProjectFilter, setShowProjectFilter] = useState(false)
+  const [showMoreFilter, setShowMoreFilter] = useState(false)
+  const [showMerchantFilter, setShowMerchantFilter] = useState(false)
+  const [showPersonFilter, setShowPersonFilter] = useState(false)
+  const startRef = useRef(null)
+  const endRef = useRef(null)
+
+  // Custom Date Range State
+  const [isCustomMode, setIsCustomMode] = useState(false)
+  const [customStart, setCustomStart] = useState(new Date().toISOString().slice(0, 10))
+  const [customEnd, setCustomEnd] = useState(new Date().toISOString().slice(0, 10))
+
+  // Calendar Jump State
+  const [showCalendarJump, setShowCalendarJump] = useState(false)
+
+  // Search State
+  const [isSearchMode, setIsSearchMode] = useState(false)
+  const [searchKeyword, setSearchKeyword] = useState('')
+
+  // Swipe Delete State
+  const [swipedItemId, setSwipedItemId] = useState(null)
+
+  // Collapse State
+  const [isCollapsed, setIsCollapsed] = useState(false)
+
   const year = currentDate.getFullYear()
   const month = currentDate.getMonth() + 1
 
-  // 根据时间范围获取标题
-  const getRangeTitle = () => {
-    switch (range) {
-      case 'today': return '今天'
-      case 'week': return '本周'
-      case 'month': return '本月'
-      case 'year': return '本年'
-      default: return '明细'
+  // 切换筛选状态的辅助函数
+  const toggleFilter = (key, value) => {
+    const current = searchParams.get(key)
+    let items = current ? current.split(',') : []
+    const strVal = String(value)
+    if (items.includes(strVal)) {
+      items = items.filter(i => i !== strVal)
+    } else {
+      items.push(strVal)
     }
+    const p = new URLSearchParams(searchParams)
+    if (items.length > 0) p.set(key, items.join(','))
+    else p.delete(key)
+    setSearchParams(p)
+  }
+
+  // 根据时间范围及筛选状态获取标题
+  const getRangeTitle = () => {
+    let title = ''
+    switch (range) {
+      case 'today': title = '今天'; break;
+      case 'week': title = '本周'; break;
+      case 'month': title = '本月'; break;
+      case 'year': title = '本年'; break;
+      case 'all': title = '全部'; break;
+      case 'custom':
+        const s = searchParams.get('start')
+        const e = searchParams.get('end')
+        title = (s && e) ? `${s} ~ ${e}` : '自定义';
+        break;
+      default: title = '明细'; break;
+    }
+
+    const filters = []
+
+    // 筛选条件处理 (支持多选)
+    const getNames = (key, list) => {
+      const val = searchParams.get(key)
+      if (!val) return []
+      const ids = val.split(',')
+      return ids.map(id => list.find(it => String(it.id) === id)?.name).filter(Boolean)
+    }
+
+    filters.push(...getNames('projectId', projects))
+    filters.push(...getNames('categoryId', categories))
+    filters.push(...getNames('accountId', accounts))
+
+    const merch = searchParams.get('merchantId')
+    if (merch) filters.push(...merch.split(','))
+
+    filters.push(...getNames('personId', persons))
+
+    if (filters.length > 0) {
+      return `${title} · ${filters.join(' & ')}`
+    }
+    return title
   }
 
   // 顶部大标题
@@ -64,6 +150,7 @@ function Records() {
       case 'week': return '本周'
       case 'month': return `${month}月`
       case 'year': return `${year}年`
+      case 'all': return '全部交易'
       default: return '账单明细'
     }
   }
@@ -86,6 +173,13 @@ function Records() {
         return { start: new Date(year, month - 1, 1), end: new Date(year, month, 0, 23, 59, 59) }
       case 'year':
         return { start: new Date(year, 0, 1), end: new Date(year, 11, 31, 23, 59, 59) }
+      case 'all':
+        return { start: new Date(0), end: new Date(2099, 11, 31) }
+      case 'custom':
+        const s = searchParams.get('start')
+        const e = searchParams.get('end')
+        if (s && e) return { start: new Date(`${s}T00:00:00`), end: new Date(`${e}T23:59:59`) }
+        return { start: new Date(), end: new Date() }
       default:
         return { start: new Date(year, month - 1, 1), end: new Date(year, month, 0, 23, 59, 59) }
     }
@@ -98,54 +192,53 @@ function Records() {
   const loadData = async () => {
     try {
       const { start, end } = getDateRangeForFilter()
-      const [rangeTrans, allCats, allTags, allPersons] = await Promise.all([
-        getTransactionsByDateRange(start, end),
+      // Convert to Local ISO String to match DB format (YYYY-MM-DDTHH:mm:ss)
+      const toLocalISO = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString()
+
+      const [rangeTrans, allCats, allTags, allPersons, allAccounts, allProjects, allMerchants] = await Promise.all([
+        getTransactionsByDateRange(toLocalISO(start), toLocalISO(end)),
         getAllCategories(),
         getAllTags(),
-        getAllPersons()
+        getAllPersons(),
+        getAllAccounts(),
+        getAllProjects(),
+        getAllMerchants()
       ])
 
+      // Load Photos for transactions
+      const transWithPhotos = await Promise.all(rangeTrans.map(async t => {
+        const photos = await getPhotosByTransactionId(t.id)
+        return { ...t, photos: photos || [] }
+      }))
+
       // 过滤逻辑
-      let filtered = rangeTrans
+      let filtered = transWithPhotos
       const categoryId = searchParams.get('categoryId')
       const accountId = searchParams.get('accountId')
       const merchantId = searchParams.get('merchantId')
       const projectId = searchParams.get('projectId')
       const personId = searchParams.get('personId')
+      const subCategory = searchParams.get('subCategory')
 
-      if (categoryId) filtered = filtered.filter(t => String(t.categoryId) === categoryId)
-      if (accountId) filtered = filtered.filter(t => String(t.accountId) === accountId || String(t.toAccountId) === accountId)
-      if (merchantId) filtered = filtered.filter(t => String(t.merchant) === merchantId) // Merchant is stored as string name usually? or ID?
-      // In AddTransaction, merchant is `merchantName` (string).
-      // But in Statistics, we might have merchant IDs if we made a store?
-      // Database.js has `merchants` store.
-      // Statistics.jsx uses `merchantData`.
-      // Let's check if transactions store merchant ID or Name.
-      // AddTransaction line 320: `merchant: merchantName`. It stores NAME.
-      // So filtering by `merchantId` might be wrong if we pass ID.
-      // If `merchantId` param is passed, is it name or ID?
-      // In Statistics, `merchantData` lists merchants.
-      // If I click a merchant row, I should pass the NAME if that's what is stored in transaction.
-      // Or pass ID if transaction has `merchantId`.
-      // Transactions have `merchant` field (name).
-      // So I should filter by `t.merchant === merchantParam`.
-      // I will assume the param passed is the Name for now, or I handle both if I can.
-      // Safest is to use Name for now as that's what is in `t.merchant`.
-      if (merchantId) filtered = filtered.filter(t => t.merchant === merchantId)
-
-      if (projectId) filtered = filtered.filter(t => String(t.projectId) === projectId) // Project is likely ID?
-      // AddTransaction stores `project: projectName`. It is also Name?
-      // Projects store has `name` and `icon`.
-      // If AddTransaction stores `project` as string, then I filter by string.
-      if (projectId) filtered = filtered.filter(t => t.project === projectId)
-
-      if (personId) filtered = filtered.filter(t => String(t.personId) === personId)
+      if (categoryId) { const ids = categoryId.split(','); filtered = filtered.filter(t => ids.includes(String(t.categoryId))) }
+      if (accountId) { const ids = accountId.split(','); filtered = filtered.filter(t => ids.includes(String(t.accountId)) || ids.includes(String(t.toAccountId))) }
+      if (merchantId) { const ids = merchantId.split(','); filtered = filtered.filter(t => ids.includes(t.merchantName || t.merchant)) }
+      if (projectId) { const ids = projectId.split(','); filtered = filtered.filter(t => ids.includes(String(t.projectId)) || ids.includes(String(t.project))) }
+      if (personId) { const ids = personId.split(','); filtered = filtered.filter(t => ids.includes(String(t.personId))) }
+      if (subCategory) { filtered = filtered.filter(t => t.subCategory === subCategory) }
 
       // 按日期降序排序
       setTransactions(filtered.sort((a, b) => new Date(b.date) - new Date(a.date)))
       setCategories(allCats)
       setTags(allTags)
       setPersons(allPersons)
+      setTransactions(filtered.sort((a, b) => new Date(b.date) - new Date(a.date)))
+      setCategories(allCats)
+      setTags(allTags)
+      setPersons(allPersons)
+      setAccounts(allAccounts)
+      setProjects(allProjects)
+      setMerchants(allMerchants)
     } catch (error) {
       console.error('加载失败:', error)
     }
@@ -166,7 +259,7 @@ function Records() {
 
   // 按日期分组
   const groupedTransactions = transactions.reduce((groups, trans) => {
-    const date = trans.date
+    const date = trans.date ? trans.date.split('T')[0] : 'Unknown'
     if (!groups[date]) groups[date] = []
     groups[date].push(trans)
     return groups
@@ -174,6 +267,23 @@ function Records() {
 
   // 排序日期
   const sortedDates = Object.keys(groupedTransactions).sort((a, b) => new Date(b) - new Date(a))
+
+  // Search Filtering
+  const filterByKeyword = (trans) => {
+    if (!searchKeyword.trim()) return true
+    const kw = searchKeyword.toLowerCase()
+    const cat = getCategory(trans.categoryId)
+    return (
+      (cat.name && cat.name.toLowerCase().includes(kw)) ||
+      (trans.remark && trans.remark.toLowerCase().includes(kw)) ||
+      (trans.merchantName && trans.merchantName.toLowerCase().includes(kw))
+    )
+  }
+
+  // Filtered Dates for Search
+  const displayDates = sortedDates.filter(date =>
+    groupedTransactions[date].some(filterByKeyword)
+  )
 
   // 切换选择模式
   const toggleSelectionMode = () => {
@@ -272,8 +382,8 @@ function Records() {
             <span style={{ color: '#fff', fontSize: '16px', marginLeft: 4 }}>{getRangeTitle()}</span>
           </button>
           <div className="nav-actions">
-            <button className="nav-icon-btn"><Calendar size={22} color="#fff" /></button>
-            <button className="nav-icon-btn"><Search size={22} color="#fff" /></button>
+            <button className="nav-icon-btn" onClick={() => setShowCalendarJump(true)}><Calendar size={22} color="#fff" /></button>
+            <button className="nav-icon-btn" onClick={() => setIsSearchMode(!isSearchMode)}><Search size={22} color={isSearchMode ? '#FFB800' : '#fff'} /></button>
             {isSelectionMode ?
               <button className="nav-icon-btn" onClick={() => { setIsSelectionMode(false); setSelectedIds(new Set()); }}>
                 <span style={{ color: '#fff', fontSize: '14px' }}>完成</span>
@@ -306,24 +416,69 @@ function Records() {
         </div>
       </div>
 
+      {/* Search Bar */}
+      {isSearchMode && (
+        <div className="search-bar" style={{
+          padding: '12px 16px',
+          background: '#fff',
+          display: 'flex',
+          gap: 10,
+          alignItems: 'center',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.05)'
+        }}>
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            background: '#f5f5f5',
+            borderRadius: 20,
+            padding: '8px 16px'
+          }}>
+            <Search size={18} color="#999" />
+            <input
+              type="text"
+              placeholder="搜索分类、备注、商家..."
+              value={searchKeyword}
+              onChange={e => setSearchKeyword(e.target.value)}
+              style={{
+                flex: 1,
+                border: 'none',
+                background: 'transparent',
+                outline: 'none',
+                marginLeft: 8,
+                fontSize: 14
+              }}
+              autoFocus
+            />
+            {searchKeyword && (
+              <button onClick={() => setSearchKeyword('')} style={{ background: 'none', border: 'none', padding: 4 }}>
+                <X size={16} color="#999" />
+              </button>
+            )}
+          </div>
+          <button onClick={() => { setIsSearchMode(false); setSearchKeyword(''); }} style={{ color: '#666', background: 'none', border: 'none', fontSize: 14 }}>取消</button>
+        </div>
+      )}
+
       {/* 底部筛选栏 */}
       <div className="filter-bar-sticky">
         <div className={`filter-item time-filter ${showRangeModal ? 'active' : ''}`} onClick={() => setShowRangeModal(!showRangeModal)}>
           <span>{currentRange === 'year' ? '年' : currentRange === 'quarter' ? '季' : currentRange === 'month' ? '月' : currentRange === 'week' ? '周' : '天'}</span>
           <ChevronDown size={12} className={showRangeModal ? 'rotate' : ''} />
         </div>
-        <div className="filter-item">
+        <div className={`filter-item ${searchParams.get('categoryId') ? 'active' : ''}`} onClick={() => setShowCategoryFilter(true)}>
           <span>分类</span>
           <ChevronDown size={12} />
         </div>
-        <div className="filter-item">
+        <div className={`filter-item ${searchParams.get('accountId') ? 'active' : ''}`} onClick={() => setShowAccountFilter(true)}>
           <span>账户</span>
+          <ChevronDown size={12} />
         </div>
-        <div className="filter-item">
+        <div className={`filter-item ${searchParams.get('projectId') ? 'active' : ''}`} onClick={() => setShowProjectFilter(true)}>
           <span>项目</span>
           <ChevronDown size={12} />
         </div>
-        <div className="filter-item">
+        <div className={`filter-item ${searchParams.get('merchantId') || searchParams.get('personId') ? 'active' : ''}`} onClick={() => setShowMoreFilter(true)}>
           <span>更多</span>
           <ChevronDown size={12} />
         </div>
@@ -353,6 +508,172 @@ function Records() {
                 {item.label}
               </div>
             ))}
+
+            {/* Custom Date Option */}
+            <div className={`range-option ${currentRange === 'custom' ? 'active' : ''}`}
+              onClick={() => setIsCustomMode(!isCustomMode)}>
+              <span style={{ flex: 1 }}>自定义日期</span>
+              {currentRange === 'custom' && <Check size={16} color="#FFB800" style={{ marginRight: 8 }} />}
+              <ChevronDown size={14} style={{ transform: isCustomMode ? 'rotate(180deg)' : 'rotate(0)', transition: 'all 0.2s' }} />
+            </div>
+
+            {isCustomMode && (
+              <div style={{ padding: '0 16px 16px', animation: 'fadeIn 0.3s' }}>
+                {/* Quick Shortcuts */}
+                <div style={{ display: 'flex', gap: 10, marginBottom: 16, overflowX: 'auto', paddingBottom: 4 }}>
+                  <button onClick={() => {
+                    const d = new Date(); d.setDate(d.getDate() - 6);
+                    setCustomStart(d.toISOString().slice(0, 10));
+                    setCustomEnd(new Date().toISOString().slice(0, 10));
+                  }} style={{ padding: '6px 12px', borderRadius: 20, border: '1px solid #eee', background: '#fff', fontSize: 12 }}>近7天</button>
+                  <button onClick={() => {
+                    const d = new Date(); d.setDate(d.getDate() - 29);
+                    setCustomStart(d.toISOString().slice(0, 10));
+                    setCustomEnd(new Date().toISOString().slice(0, 10));
+                  }} style={{ padding: '6px 12px', borderRadius: 20, border: '1px solid #eee', background: '#fff', fontSize: 12 }}>近30天</button>
+                  <button onClick={() => {
+                    const now = new Date();
+                    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+                    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                    setCustomStart(start.toISOString().slice(0, 10));
+                    setCustomEnd(end.toISOString().slice(0, 10));
+                  }} style={{ padding: '6px 12px', borderRadius: 20, border: '1px solid #eee', background: '#fff', fontSize: 12 }}>本月</button>
+                </div>
+
+                <div style={{ background: '#f8f8f8', borderRadius: 12, padding: '0 16px', marginBottom: 16 }}>
+                  <div style={{ position: 'relative', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', borderBottom: '1px solid #eee', cursor: 'pointer' }}
+                    onClick={() => startRef.current && startRef.current.showPicker()}>
+                    <span style={{ fontSize: 15 }}>开始日期</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#333' }}>
+                      {customStart} <ChevronRight size={16} color="#ccc" />
+                    </div>
+                    <input ref={startRef} type="date" value={customStart} onChange={e => setCustomStart(e.target.value)}
+                      style={{ position: 'absolute', left: 0, bottom: 0, width: 1, height: 1, opacity: 0, zIndex: -1 }} />
+                  </div>
+                  <div style={{ position: 'relative', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', cursor: 'pointer' }}
+                    onClick={() => endRef.current && endRef.current.showPicker()}>
+                    <span style={{ fontSize: 15 }}>结束日期</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#333' }}>
+                      {customEnd} <ChevronRight size={16} color="#ccc" />
+                    </div>
+                    <input ref={endRef} type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)}
+                      style={{ position: 'absolute', left: 0, bottom: 0, width: 1, height: 1, opacity: 0, zIndex: -1 }} />
+                  </div>
+                </div>
+                <button onClick={() => {
+                  setCurrentRange('custom')
+                  setShowRangeModal(false)
+                  navigate(`/records?range=custom&start=${customStart}&end=${customEnd}`, { replace: true })
+                }} style={{ width: '100%', background: '#FFB800', color: '#fff', padding: 12, borderRadius: 12, border: 'none', fontWeight: '600', fontSize: 16 }}>确定</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Category Filter */}
+      {showCategoryFilter && (
+        <div className="range-modal-overlay" onClick={() => setShowCategoryFilter(false)}>
+          <div className="range-modal" onClick={e => e.stopPropagation()} style={{ height: '60vh', overflowY: 'auto' }}>
+            <div className="modal-title" style={{ padding: '10px', textAlign: 'center', fontWeight: '600' }}>选择分类 (可多选)</div>
+            <div className="range-option" onClick={() => { const p = new URLSearchParams(searchParams); p.delete('categoryId'); setSearchParams(p); }}>
+              <span style={{ flex: 1 }}>全部分类</span>
+              {!searchParams.get('categoryId') && <Check size={16} color="#FFB800" />}
+            </div>
+            {categories.map(c => (
+              <div key={c.id} className={`range-option ${searchParams.get('categoryId')?.split(',').includes(String(c.id)) ? 'active' : ''}`}
+                onClick={() => toggleFilter('categoryId', c.id)}>
+                <span style={{ marginRight: 8 }}>{c.icon}</span>
+                <span style={{ flex: 1 }}>{c.name}</span>
+                {searchParams.get('categoryId')?.split(',').includes(String(c.id)) && <Check size={16} color="#FFB800" />}
+              </div>
+            ))}
+            <div style={{ padding: '20px', textAlign: 'center', position: 'sticky', bottom: 0, background: '#fff', borderTop: '1px solid #f0f0f0' }}>
+              <button onClick={() => setShowCategoryFilter(false)} style={{ background: '#FFB800', color: '#fff', border: 'none', padding: '10px 40px', borderRadius: '20px' }}>完成</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Account Filter */}
+      {showAccountFilter && (
+        <div className="range-modal-overlay" onClick={() => setShowAccountFilter(false)}>
+          <div className="range-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-title" style={{ padding: '10px', textAlign: 'center', fontWeight: '600' }}>选择账户 (可多选)</div>
+            <div className="range-option" onClick={() => { const p = new URLSearchParams(searchParams); p.delete('accountId'); setSearchParams(p); }}>
+              <span style={{ flex: 1 }}>全部账户</span>
+              {!searchParams.get('accountId') && <Check size={16} color="#FFB800" />}
+            </div>
+            {accounts.map(a => (
+              <div key={a.id} className={`range-option ${searchParams.get('accountId')?.split(',').includes(String(a.id)) ? 'active' : ''}`}
+                onClick={() => toggleFilter('accountId', a.id)}>
+                <span style={{ flex: 1 }}>{a.name}</span>
+                {searchParams.get('accountId')?.split(',').includes(String(a.id)) && <Check size={16} color="#FFB800" />}
+              </div>
+            ))}
+            <div style={{ padding: '20px', textAlign: 'center' }}>
+              <button onClick={() => setShowAccountFilter(false)} style={{ background: '#FFB800', color: '#fff', border: 'none', padding: '10px 40px', borderRadius: '20px' }}>完成</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Project Filter */}
+      {showProjectFilter && (
+        <div className="range-modal-overlay" onClick={() => setShowProjectFilter(false)}>
+          <div className="range-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-title" style={{ padding: '10px', textAlign: 'center', fontWeight: '600' }}>选择项目 (可多选)</div>
+            <div className="range-option" onClick={() => { const p = new URLSearchParams(searchParams); p.delete('projectId'); setSearchParams(p); }}>
+              <span style={{ flex: 1 }}>全部项目</span>
+              {!searchParams.get('projectId') && <Check size={16} color="#FFB800" />}
+            </div>
+            {projects.map(p => (
+              <div key={p.id} className={`range-option ${searchParams.get('projectId')?.split(',').includes(String(p.id)) ? 'active' : ''}`}
+                onClick={() => toggleFilter('projectId', p.id)}>
+                <span style={{ flex: 1 }}>{p.name}</span>
+                {searchParams.get('projectId')?.split(',').includes(String(p.id)) && <Check size={16} color="#FFB800" />}
+              </div>
+            ))}
+            <div style={{ padding: '20px', textAlign: 'center' }}>
+              <button onClick={() => setShowProjectFilter(false)} style={{ background: '#FFB800', color: '#fff', border: 'none', padding: '10px 40px', borderRadius: '20px' }}>完成</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* More Filter (Merchants, Persons) */}
+      {showMoreFilter && (
+        <div className="range-modal-overlay" onClick={() => setShowMoreFilter(false)}>
+          <div className="range-modal" onClick={e => e.stopPropagation()} style={{ height: '50vh', overflowY: 'auto' }}>
+            <div style={{ padding: '12px', textAlign: 'center', fontWeight: '600' }}>更多筛选</div>
+
+            <div style={{ padding: '8px 16px', background: '#f9f9f9', fontWeight: '500' }}>商家</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', padding: '8px' }}>
+              <div style={{ padding: '6px 12px', margin: '4px', background: !searchParams.get('merchantId') ? '#FFB800' : '#f0f0f0', borderRadius: '12px', color: !searchParams.get('merchantId') ? '#fff' : '#666', fontSize: 13 }}
+                onClick={() => { const p = new URLSearchParams(searchParams); p.delete('merchantId'); setSearchParams(p); }}>全部</div>
+              {merchants.map(m => (
+                <div key={m.id} style={{ padding: '6px 12px', margin: '4px', background: searchParams.get('merchantId')?.split(',').includes(m.name) ? '#FFB800' : '#f0f0f0', borderRadius: '12px', color: searchParams.get('merchantId')?.split(',').includes(m.name) ? '#fff' : '#666', fontSize: 13 }}
+                  onClick={() => toggleFilter('merchantId', m.name)}>
+                  {m.name}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ padding: '8px 16px', background: '#f9f9f9', fontWeight: '500' }}>成员</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', padding: '8px' }}>
+              <div style={{ padding: '6px 12px', margin: '4px', background: !searchParams.get('personId') ? '#FFB800' : '#f0f0f0', borderRadius: '12px', color: !searchParams.get('personId') ? '#fff' : '#666', fontSize: 13 }}
+                onClick={() => { const p = new URLSearchParams(searchParams); p.delete('personId'); setSearchParams(p); }}>全部</div>
+              {persons.map(ps => (
+                <div key={ps.id} style={{ padding: '6px 12px', margin: '4px', background: searchParams.get('personId')?.split(',').includes(String(ps.id)) ? '#FFB800' : '#f0f0f0', borderRadius: '12px', color: searchParams.get('personId')?.split(',').includes(String(ps.id)) ? '#fff' : '#666', fontSize: 13 }}
+                  onClick={() => toggleFilter('personId', ps.id)}>
+                  {ps.name}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ padding: '20px', textAlign: 'center' }}>
+              <button onClick={() => setShowMoreFilter(false)} style={{ background: '#FFB800', color: '#fff', border: 'none', padding: '10px 40px', borderRadius: '20px' }}>完成</button>
+            </div>
           </div>
         </div>
       )}
@@ -360,7 +681,7 @@ function Records() {
       {/* 列表内容 */}
       <div className="records-list">
         {/* 月度汇总头 */}
-        <div className="month-summary-header">
+        <div className="month-summary-header" onClick={() => setIsCollapsed(!isCollapsed)} style={{ cursor: 'pointer' }}>
           <div className="month-date">
             <span className="month-val">{month}月</span>
             <span className="year-val">{year}</span>
@@ -369,7 +690,9 @@ function Records() {
             <div className="stats-row">
               <span className="label">结余</span>
               <span className="val">{formatAmount(totalIncome - totalExpense)}</span>
-              <div className="arrow-box"><ChevronDown size={12} color="#999" /></div>
+              <div className="arrow-box" style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+                <ChevronDown size={12} color="#999" />
+              </div>
             </div>
             <div className="stats-detail">
               <span>收入 {formatAmount(totalIncome)}</span>
@@ -379,8 +702,8 @@ function Records() {
           </div>
         </div>
 
-        {sortedDates.map(date => {
-          const dayTransactions = groupedTransactions[date]
+        {!isCollapsed && displayDates.map(date => {
+          const dayTransactions = groupedTransactions[date].filter(filterByKeyword)
           const weekDay = new Date(date).getDay()
           const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
           // 仅在列表项中不再重复日汇总，因为随手记风格通常是简化日头
@@ -388,11 +711,12 @@ function Records() {
           return (
             <div key={date} className="day-group">
               <div className="day-simple-header">
-                <span>{date.split('-')[2]}日 {weekDays[weekDay]}</span>
+                <span>{date.split('-')[1]}月{date.split('-')[2]}日 {weekDays[weekDay]}</span>
               </div>
               {dayTransactions.map(trans => {
                 const category = getCategory(trans.categoryId)
                 const isSelected = selectedIds.has(trans.id)
+                const isSwiped = swipedItemId === trans.id
 
                 return (
                   <div
@@ -419,7 +743,10 @@ function Records() {
 
                     <div className="record-content">
                       <div className="record-main">
-                        <span className="category-name">{category.name}</span>
+                        <span className="category-name">
+                          {category.name}
+                          {trans.subCategory && <span style={{ color: '#999', fontWeight: 400 }}> · {trans.subCategory}</span>}
+                        </span>
                         <span className={`amount ${trans.type}`}>
                           {formatAmount(trans.amount)}
                         </span>
@@ -427,10 +754,18 @@ function Records() {
                       <div className="record-sub">
                         <div className="sub-left">
                           {trans.remark && <span className="remark">{trans.remark}</span>}
-                          {/* 随手记风格显示 账户 · 成员 · 时间 */}
+
+                          {/* Photos Thumbnail List */}
+                          {trans.photos && trans.photos.length > 0 && (
+                            <div className="record-photos" style={{ display: 'flex', gap: 4, margin: '4px 0', overflowX: 'auto' }}>
+                              {trans.photos.map(p => (
+                                <img key={p.id} src={p.data} alt="img" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, border: '1px solid #eee' }} />
+                              ))}
+                            </div>
+                          )}
+
                           <div className="meta-info">
-                            {/* 暂时没有账户名获取逻辑，Mock一个 */}
-                            <span>现金</span>
+                            <span>{accounts.find(a => a.id === trans.accountId)?.name || '现金'}</span>
                             <span> · </span>
                             <span>{persons.find(p => p.id === trans.personId)?.name || '我'}</span>
                             <span> · </span>
@@ -441,8 +776,21 @@ function Records() {
                     </div>
 
                     {!isSelectionMode && (
-                      <button className="delete-btn" onClick={(e) => { e.stopPropagation(); handleDelete(trans.id); }}>
-                        <Trash2 size={16} color="#ccc" />
+                      <button
+                        className="delete-btn"
+                        onClick={(e) => { e.stopPropagation(); handleDelete(trans.id); }}
+                        style={{
+                          background: '#ff4d4f',
+                          color: '#fff',
+                          border: 'none',
+                          padding: '8px 16px',
+                          borderRadius: 4,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4
+                        }}
+                      >
+                        <Trash2 size={16} color="#fff" />
                       </button>
                     )}
                   </div>
@@ -474,60 +822,133 @@ function Records() {
       </div>
 
       {/* 底部批量操作栏 */}
-      {isSelectionMode && (
-        <div className="batch-actions">
-          <button className="batch-btn delete" onClick={handleBatchDelete} disabled={selectedIds.size === 0}>
-            <Trash2 size={20} />
-            <span>删除</span>
-          </button>
-          <button className="batch-btn" onClick={() => setShowTagModal(true)} disabled={selectedIds.size === 0}>
-            <Tag size={20} />
-            <span>标签</span>
-          </button>
-          <button className="batch-btn" onClick={() => setShowPersonModal(true)} disabled={selectedIds.size === 0}>
-            <Users size={20} />
-            <span>人员</span>
-          </button>
-        </div>
-      )}
+      {
+        isSelectionMode && (
+          <div className="batch-actions" style={{
+            position: 'fixed',
+            bottom: 70, // Above the navigation bar
+            left: 0,
+            right: 0,
+            background: '#fff',
+            padding: '12px 20px',
+            display: 'flex',
+            justifyContent: 'space-around',
+            boxShadow: '0 -4px 12px rgba(0,0,0,0.1)',
+            zIndex: 1000,
+            borderTop: '1px solid #eee'
+          }}>
+            <div style={{ textAlign: 'center', fontSize: 12, color: '#666', marginBottom: 8, width: '100%', position: 'absolute', top: -24, left: 0, background: '#fff', padding: '4px 0' }}>
+              已选择 {selectedIds.size} 项
+            </div>
+            <button
+              onClick={handleBatchDelete}
+              disabled={selectedIds.size === 0}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 4,
+                background: 'none',
+                border: 'none',
+                color: selectedIds.size > 0 ? '#ff4d4f' : '#ccc',
+                fontSize: 12
+              }}
+            >
+              <Trash2 size={22} />
+              <span>删除</span>
+            </button>
+            <button
+              onClick={() => setShowTagModal(true)}
+              disabled={selectedIds.size === 0}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 4,
+                background: 'none',
+                border: 'none',
+                color: selectedIds.size > 0 ? '#333' : '#ccc',
+                fontSize: 12
+              }}
+            >
+              <Tag size={22} />
+              <span>标签</span>
+            </button>
+            <button
+              onClick={() => setShowPersonModal(true)}
+              disabled={selectedIds.size === 0}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 4,
+                background: 'none',
+                border: 'none',
+                color: selectedIds.size > 0 ? '#333' : '#ccc',
+                fontSize: 12
+              }}
+            >
+              <Users size={22} />
+              <span>人员</span>
+            </button>
+          </div>
+        )
+      }
 
       {/* 标签选择模态框 */}
-      {showTagModal && (
-        <div className="modal-overlay" onClick={() => setShowTagModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h3>批量设置标签</h3>
-            <div className="tag-list">
-              {tags.map(tag => (
-                <button key={tag.id} className="tag-option" onClick={() => handleBatchTag(tag.id)}>
-                  {tag.name}
+      {
+        showTagModal && (
+          <div className="modal-overlay" onClick={() => setShowTagModal(false)}>
+            <div className="modal-content" onClick={e => e.stopPropagation()}>
+              <h3>批量设置标签</h3>
+              <div className="tag-list">
+                {tags.map(tag => (
+                  <button key={tag.id} className="tag-option" onClick={() => handleBatchTag(tag.id)}>
+                    {tag.name}
+                  </button>
+                ))}
+                <button className="tag-option clear" onClick={() => handleBatchTag(null)}>
+                  清除标签
                 </button>
-              ))}
-              <button className="tag-option clear" onClick={() => handleBatchTag(null)}>
-                清除标签
-              </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* 人员选择模态框 */}
-      {showPersonModal && (
-        <div className="modal-overlay" onClick={() => setShowPersonModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h3>批量设置人员</h3>
-            <div className="person-list">
-              {persons.map(person => (
-                <button key={person.id} className="person-option" onClick={() => handleBatchPerson(person.id)}>
-                  {person.avatar} {person.name}
+      {
+        showPersonModal && (
+          <div className="modal-overlay" onClick={() => setShowPersonModal(false)}>
+            <div className="modal-content" onClick={e => e.stopPropagation()}>
+              <h3>批量设置人员</h3>
+              <div className="person-list">
+                {persons.map(person => (
+                  <button key={person.id} className="person-option" onClick={() => handleBatchPerson(person.id)}>
+                    {person.avatar} {person.name}
+                  </button>
+                ))}
+                <button className="person-option clear" onClick={() => handleBatchPerson(null)}>
+                  清除人员
                 </button>
-              ))}
-              <button className="person-option clear" onClick={() => handleBatchPerson(null)}>
-                清除人员
-              </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
+
+      {/* Calendar Jump Modal */}
+      <DatePickerModal
+        isOpen={showCalendarJump}
+        onClose={() => setShowCalendarJump(false)}
+        title="跳转到日期"
+        initialDate={currentDate.toISOString().slice(0, 10)}
+        onSelect={(date) => {
+          const d = new Date(date)
+          navigate(`/records?range=month&year=${d.getFullYear()}&month=${d.getMonth() + 1}`, { replace: true })
+          setShowCalendarJump(false)
+        }}
+      />
 
       <style>{`
         .records-page {
@@ -641,6 +1062,10 @@ function Records() {
             display: flex;
             align-items: center;
             gap: 4px;
+        }
+        .filter-item.active {
+            color: #FFB800;
+            font-weight: 500;
         }
         
         /* 列表部分 */
@@ -756,10 +1181,8 @@ function Records() {
             font-family: 'DIN Alternate', sans-serif;
         }
         
-        .amount.expense { color: #333; }
-        .amount.income { color: #FF6B6B; } /* 随手记收入是红色的 */ --expense实际上随手记支出是绿的？不对，随手记支出是绿色/黑色，收入是红色。这里沿用之前的 */
-        .amount.expense { color: #00BB9C; } /* 随手记经典绿 */
-        .amount.income { color: #FF5959; } /* 随手记红 */
+        .amount.expense { color: var(--expense); }
+        .amount.income { color: var(--income); }
         
         .record-sub {
             font-size: 11px;
@@ -978,7 +1401,7 @@ function Records() {
           background: #f5f5f5;
         }
       `}</style>
-    </div>
+    </div >
   )
 }
 

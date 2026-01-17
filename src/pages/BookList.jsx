@@ -3,13 +3,18 @@ import { useNavigate } from 'react-router-dom'
 import { Plus, Book, LogOut, User } from 'lucide-react'
 import { getUserBooks, createBook, initGlobalDB } from '../db/global'
 import { initDB } from '../db/database'
+import { secureStorage } from '../utils/secureStorage'
+import { logger } from '../utils/logger'
 
 function BookList() {
     const navigate = useNavigate()
     const [books, setBooks] = useState([])
     const [loading, setLoading] = useState(true)
 
-    const USER_ID = localStorage.getItem('user_id') ? Number(localStorage.getItem('user_id')) : null
+    const USER_ID = (() => {
+        const id = secureStorage.get('user_id') || secureStorage.migrateFromLocalStorage('user_id')
+        return id ? Number(id) : null
+    })()
 
     useEffect(() => {
         if (!USER_ID) {
@@ -20,7 +25,8 @@ function BookList() {
     }, [USER_ID]) // Add USER_ID as dependency
 
     const handleLogout = () => {
-        localStorage.clear()
+        secureStorage.clear()
+        localStorage.clear() // 清理旧的 localStorage 数据
         navigate('/login')
     }
 
@@ -37,7 +43,7 @@ function BookList() {
             }
             setBooks(userBooks)
         } catch (e) {
-            console.error(e)
+            logger.error('加载账本失败:', e)
             alert('加载账本失败')
         } finally {
             setLoading(false)
@@ -48,10 +54,10 @@ function BookList() {
         try {
             // Initialize the selected book's DB
             await initDB(book.dbName)
-            // Persist choice
-            localStorage.setItem('current_book_id', book.id)
-            localStorage.setItem('current_book_name', book.name)
-            localStorage.setItem('current_db_name', book.dbName)
+            // Persist choice (Secure)
+            secureStorage.set('current_book_id', book.id)
+            secureStorage.set('current_book_name', book.name)
+            secureStorage.set('current_db_name', book.dbName)
             // Navigate Home
             navigate('/')
             // We might need to reload window to ensure all components re-bind? 
@@ -59,7 +65,7 @@ function BookList() {
             // Our stores import getDB from database.js. If initDB updates the singleton `db`, then subsequent getDB() calls get the new one.
             // So navigation should be enough.
         } catch (e) {
-            console.error(e)
+            logger.error('打开账本失败:', e)
             alert('打开账本失败')
         }
     }

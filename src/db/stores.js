@@ -11,10 +11,25 @@ export async function getAllTransactions() {
     return await db.getAll('transactions')
 }
 
+/**
+ * 按日期范围获取交易记录 (使用索引优化)
+ * @param {string} start - 开始日期 ISO 字符串
+ * @param {string} end - 结束日期 ISO 字符串
+ * @returns {Promise<Array>} 交易记录数组
+ */
 export async function getTransactionsByDateRange(start, end) {
     const db = getDB()
-    const all = await db.getAll('transactions')
-    return all.filter(t => t.date >= start && t.date <= end)
+    try {
+        // 优先使用索引查询 (性能优化)
+        const tx = db.transaction('transactions', 'readonly')
+        const index = tx.store.index('date')
+        const range = IDBKeyRange.bound(start, end)
+        return await index.getAll(range)
+    } catch (e) {
+        // 索引不存在时回退到全量过滤
+        const all = await db.getAll('transactions')
+        return all.filter(t => t.date >= start && t.date <= end)
+    }
 }
 
 export async function getTransactionsByMonth(year, month) {
@@ -318,12 +333,19 @@ export async function getCategoryStats(year, month, type = 'expense') {
     let total = 0
     filtered.forEach(t => {
         const catId = t.categoryId
-        if (!stats[catId]) {
+        const subCat = t.subCategory || ''
+        const key = `${catId}|${subCat}`
+
+        if (!stats[key]) {
             const cat = categoryMap.get(catId) || { id: catId, name: '未知', icon: '❓', color: '#ccc' }
-            stats[catId] = { category: cat, amount: 0, count: 0 }
+            stats[key] = {
+                category: { ...cat, subName: subCat },
+                amount: 0,
+                count: 0
+            }
         }
-        stats[catId].amount += t.amount
-        stats[catId].count++
+        stats[key].amount += t.amount
+        stats[key].count++
         total += t.amount
     })
 
@@ -331,6 +353,20 @@ export async function getCategoryStats(year, month, type = 'expense') {
         total,
         stats: Object.values(stats).sort((a, b) => b.amount - a.amount)
     }
+}
+
+
+// ==================== Projects & Merchants ====================
+export async function getAllProjects() {
+    const db = getDB()
+    if (!db.objectStoreNames.contains('projects')) return []
+    return await db.getAll('projects')
+}
+
+export async function getAllMerchants() {
+    const db = getDB()
+    if (!db.objectStoreNames.contains('merchants')) return []
+    return await db.getAll('merchants')
 }
 
 // ==================== Clear ====================

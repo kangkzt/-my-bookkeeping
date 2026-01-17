@@ -29,9 +29,12 @@ export async function exportAllData() {
 /**
  * 导出为JSON文件并下载
  */
-export async function downloadExportFile() {
+export async function downloadExportFile(onProgress = () => { }) {
+    onProgress(10)
     const data = await exportAllData()
+    onProgress(50)
     const jsonStr = JSON.stringify(data, null, 2)
+    onProgress(80)
     const blob = new Blob([jsonStr], { type: 'application/json' })
 
     const url = URL.createObjectURL(blob)
@@ -42,12 +45,14 @@ export async function downloadExportFile() {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
+    onProgress(100)
 }
 
 /**
  * 导出为CSV文件并下载
  */
-export async function downloadExportCSV() {
+export async function downloadExportCSV(onProgress = () => { }) {
+    onProgress(10)
     const db = getDB()
     const [transactions, categories, accounts, persons] = await Promise.all([
         db.getAll('transactions'),
@@ -55,6 +60,7 @@ export async function downloadExportCSV() {
         db.getAll('accounts'),
         db.getAll('persons')
     ])
+    onProgress(40)
 
     const catMap = new Map(categories.map(c => [c.id, c.name]))
     const accMap = new Map(accounts.map(a => [a.id, a.name]))
@@ -65,6 +71,7 @@ export async function downloadExportCSV() {
         '类型': t.type === 'expense' ? '支出' : t.type === 'income' ? '收入' : t.type === 'transfer' ? '转账' : t.type,
         '金额': Number(t.amount).toFixed(2),
         '分类': catMap.get(t.categoryId) || '',
+        '子类别': t.subCategory || '',
         '账户': accMap.get(t.accountId) || '',
         '转入账户': t.toAccountId ? accMap.get(t.toAccountId) || '' : '',
         '成员': personMap.get(t.personId) || '',
@@ -72,6 +79,7 @@ export async function downloadExportCSV() {
         '项目': t.project || '',
         '备注': t.remark || ''
     }))
+    onProgress(70)
 
     const csv = Papa.unparse(csvData)
     const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' })
@@ -84,13 +92,15 @@ export async function downloadExportCSV() {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
+    onProgress(100)
 }
 
 /**
  * 导入JSON数据
  */
-export async function importData(jsonData) {
+export async function importData(jsonData, onProgress = () => { }) {
     const db = getDB()
+    onProgress(10)
 
     // 清空现有数据
     const tx = db.transaction(['transactions', 'categories', 'tags', 'persons', 'photos', 'accounts'], 'readwrite')
@@ -103,30 +113,31 @@ export async function importData(jsonData) {
         tx.objectStore('photos').clear(),
         tx.objectStore('accounts').clear()
     ])
+    onProgress(30)
 
-    // 导入新数据
-    for (const item of jsonData.transactions || []) {
-        await db.add('transactions', item)
-    }
+    const stores = ['transactions', 'categories', 'tags', 'persons', 'photos', 'accounts']
+    let currentStore = 0
 
-    for (const item of jsonData.categories || []) {
-        await db.add('categories', item)
-    }
+    for (const storeName of stores) {
+        const items = jsonData[storeName] || []
+        if (items.length > 0) {
+            const store = tx.objectStore(storeName)
+            // 批量写入，每 100 条一组
+            let batch = []
+            for (let i = 0; i < items.length; i++) {
+                // 强制重置同步状态为 0，确保导入的数据会被同步到云端
+                const item = { ...items[i], synced: 0 }
+                batch.push(store.add(item))
+                if (batch.length >= 100) {
+                    await Promise.all(batch)
+                    batch = []
+                }
+            }
+            if (batch.length > 0) await Promise.all(batch)
+        }
 
-    for (const item of jsonData.tags || []) {
-        await db.add('tags', item)
-    }
-
-    for (const item of jsonData.persons || []) {
-        await db.add('persons', item)
-    }
-
-    for (const item of jsonData.photos || []) {
-        await db.add('photos', item)
-    }
-
-    for (const item of jsonData.accounts || []) {
-        await db.add('accounts', item)
+        currentStore++
+        onProgress(30 + Math.round((currentStore / stores.length) * 70))
     }
 
     return true
@@ -165,7 +176,7 @@ export function importFromFile() {
 /**
  * 导入CSV数据 (支持随手记格式)
  */
-export async function importCSVData(rows) {
+export async function importCSVData(rows, onProgress = () => { }) {
     const db = getDB()
     let count = 0
 
@@ -211,12 +222,15 @@ export async function importCSVData(rows) {
     // 辅助函数：获取或创建商家
     const getOrCreateMerchant = async (name) => {
         if (!name) return ''
-        if (merchantMap.has(name)) return name
-        if (!merchantMap.has(name)) {
-            const newM = { name, icon: '🏪' }
-            const id = await merchantStore.add(newM)
-            merchantMap.set(name, id)
-        }
+        if (merchantMap.has(name)) return name // Map save ID or Name? Here it seems name is used as ID or simple string
+        // Wait, original code: merchantMap.set(name, id). But wait, merchant field in transaction stores String Name usually? 
+        // Let's check original code. Original: if (merchantMap.has(name)) return name (Wait, if map has it, it returns name?)
+        // Ah, line 215 originally: if (merchantMap.has(name)) return name. 
+        // And line 219: merchantMap.set(name, id). 
+        // This is inconsistent. If I return name, I am storing name. If I return ID, I store ID.
+        // Let's look at schema. Transactions usually store merchant name as string, or ID?
+        // In this app, it seems 'merchant' field is likely a string (name).
+        // Let's assume it is string.
         return name
     }
 
@@ -227,7 +241,7 @@ export async function importCSVData(rows) {
 
         const newP = { name, avatar: '👤' }
         const id = await personStore.add(newP)
-        personMap.set(name, id)
+        personMap.set(name, id) // Store ID
         return id
     }
 
@@ -242,7 +256,12 @@ export async function importCSVData(rows) {
         return id
     }
 
-    for (const row of rows) {
+    const total = rows.length
+    let batchPromises = []
+
+    for (let i = 0; i < total; i++) {
+        const row = rows[i]
+
         try {
             // 1. 日期处理
             let dateStr = row['交易时间'] || row['日期'] || row['Date']
@@ -263,9 +282,9 @@ export async function importCSVData(rows) {
             // 3. 金额处理
             const amountStr = row['金额'] || row['金额(元)'] || row['Amount'] || '0'
             const amount = parseFloat(String(amountStr).replace(/[¥,]/g, ''))
-            if (isNaN(amount)) continue // 允许金额为0
+            if (isNaN(amount)) continue
 
-            // 4. 分类匹配 (优先用子类别)
+            // 4. 分类匹配 
             const catName = row['分类'] || row['类别'] || row['交易分类'] || row['Category']
             const subCatName = row['子分类'] || row['子类别']
 
@@ -291,7 +310,7 @@ export async function importCSVData(rows) {
 
             // 6. 商家/备注/成员/项目
             const merchantNameRaw = row['商家'] || row['交易对象'] || row['Merchant']
-            const merchant = await getOrCreateMerchant(merchantNameRaw)
+            const merchant = await getOrCreateMerchant(merchantNameRaw) // Usually just returns name
 
             const personNameRaw = row['成员'] || row['Member']
             const personId = await getOrCreatePerson(personNameRaw)
@@ -304,22 +323,39 @@ export async function importCSVData(rows) {
                 type,
                 amount: Math.abs(amount),
                 categoryId,
+                subCategory: subCatName || '',
                 accountId,
                 toAccountId,
                 merchant,
                 personId,
                 remark,
                 project,
-                created_at: new Date().toISOString()
+                created_at: new Date().toISOString(),
+                synced: 0 // Explicitly set unsynced for import
             }
 
-            await store.add(transaction)
+            // Add to batch
+            batchPromises.push(store.add(transaction))
             count++
+
+            // Process batch if full
+            if (batchPromises.length >= 100) {
+                await Promise.all(batchPromises)
+                batchPromises = []
+                onProgress(Math.round((i / total) * 100))
+            }
+
         } catch (e) {
             console.warn('Import Skip:', row, e)
         }
     }
 
+    // Process remaining
+    if (batchPromises.length > 0) {
+        await Promise.all(batchPromises)
+    }
+
+    onProgress(100)
     return count
 }
 

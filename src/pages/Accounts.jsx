@@ -235,7 +235,7 @@ function Accounts() {
               {isExpanded && (
                 <div className="group-list">
                   {groupAccounts.map(acc => (
-                    <div key={acc.id} className="account-item" onClick={() => navigate(`/records?accountId=${acc.id}`)}>
+                    <div key={acc.id} className="account-item" onClick={() => navigate(`/records?accountId=${acc.id}&range=all`)}>
                       <div className="account-icon">{acc.icon || '💰'}</div>
                       <div className="account-info">
                         <span className="account-name">{acc.name}</span>
@@ -365,7 +365,7 @@ function Accounts() {
           margin: 16px;
           padding: 24px;
           background: linear-gradient(120deg, #84fab0 0%, #8fd3f4 100%);
-          background-image: url('https://images.unsplash.com/photo-1620714223084-8fcacc6dfd8d?q=80&w=800&auto=format&fit=crop');
+          /* background-image: url('...'); Remove image or use a neutral one if needed, keeping simple gradient for now */
           background-size: cover;
           background-position: center;
           border-radius: 20px;

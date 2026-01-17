@@ -1,4 +1,5 @@
 import Tesseract from 'tesseract.js';
+import { logger } from './logger';
 
 /**
  * Recognize text from a receipt image.
@@ -12,7 +13,7 @@ export const recognizeReceipt = async (imageFile, onProgress = () => { }) => {
             'chi_sim+eng', // Support Chinese and English
             {
                 logger: m => {
-                    console.log(m)
+                    logger.debug('Tesseract:', m)
                     if (m.status === 'recognizing text') {
                         onProgress(m.progress)
                     }
@@ -20,11 +21,11 @@ export const recognizeReceipt = async (imageFile, onProgress = () => { }) => {
             }
         );
 
-        console.log('OCR Text:', text);
+        logger.log('OCR Text:', text);
 
         return parseReceiptText(text);
     } catch (error) {
-        console.error('OCR Error:', error);
+        logger.error('OCR Error:', error);
         throw new Error('识别失败，请重试');
     }
 };

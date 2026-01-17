@@ -5,6 +5,7 @@
 
 import Papa from 'papaparse'
 import { addTransaction, getAllCategories, addCategory } from './stores'
+import { logger } from '../utils/logger'
 
 /**
  * 解析CSV文件
@@ -87,8 +88,10 @@ export async function importSuishouji(file) {
 
     let imported = 0
     let failed = 0
+    const errors = []
 
-    for (const row of rows) {
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i]
         try {
             const type = row['交易类型'] === '支出' ? 'expense' : 'income'
             const categoryName = row['分类'] || row['子分类'] || '其他'
@@ -112,12 +115,13 @@ export async function importSuishouji(file) {
 
             imported++
         } catch (error) {
-            console.error('导入行失败:', row, error)
+            logger.error('导入行失败:', row, error)
             failed++
+            errors.push({ row: i + 1, message: error.message, data: row })
         }
     }
 
-    return { imported, failed }
+    return { imported, failed, errors }
 }
 
 /**
@@ -126,7 +130,6 @@ export async function importSuishouji(file) {
  */
 export async function importWechat(file) {
     const text = await file.text()
-    // 微信账单前几行是标题信息，需要跳过
     const lines = text.split('\n')
     const dataStart = lines.findIndex(line => line.includes('交易时间'))
     if (dataStart === -1) {
@@ -138,8 +141,10 @@ export async function importWechat(file) {
 
     let imported = 0
     let failed = 0
+    const errors = []
 
-    for (const row of rows) {
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i]
         try {
             const incomeOrExpense = row['收/支'] || ''
             if (!incomeOrExpense || incomeOrExpense === '/' || incomeOrExpense === '不计收支') continue
@@ -167,12 +172,13 @@ export async function importWechat(file) {
 
             imported++
         } catch (error) {
-            console.error('导入行失败:', row, error)
+            logger.error('导入行失败:', row, error)
             failed++
+            errors.push({ row: i + 1, message: error.message, data: row })
         }
     }
 
-    return { imported, failed }
+    return { imported, failed, errors }
 }
 
 /**
@@ -181,7 +187,6 @@ export async function importWechat(file) {
  */
 export async function importAlipay(file) {
     const text = await file.text()
-    // 支付宝账单前几行也是标题信息
     const lines = text.split('\n')
     const dataStart = lines.findIndex(line => line.includes('交易时间'))
     if (dataStart === -1) {
@@ -193,8 +198,10 @@ export async function importAlipay(file) {
 
     let imported = 0
     let failed = 0
+    const errors = []
 
-    for (const row of rows) {
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i]
         try {
             const incomeOrExpense = row['收/支'] || ''
             if (!incomeOrExpense || incomeOrExpense === '不计收支') continue
@@ -222,12 +229,13 @@ export async function importAlipay(file) {
 
             imported++
         } catch (error) {
-            console.error('导入行失败:', row, error)
+            logger.error('导入行失败:', row, error)
             failed++
+            errors.push({ row: i + 1, message: error.message, data: row })
         }
     }
 
-    return { imported, failed }
+    return { imported, failed, errors }
 }
 
 /**

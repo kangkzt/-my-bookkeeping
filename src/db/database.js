@@ -1,12 +1,26 @@
-// 扩展数据库 - 添加账户、预算、项目表
+/**
+ * database.js - IndexedDB 数据库初始化与管理
+ * 
+ * 版本历史:
+ * ┌─────────┬──────────────────────────────────────────────────────────────┐
+ * │ Version │ Changes                                                      │
+ * ├─────────┼──────────────────────────────────────────────────────────────┤
+ * │ V1      │ 初始版本 - transactions, categories, tags, persons, photos   │
+ * │ V2      │ 添加 accounts, budgets, projects, merchants                  │
+ * │ V3      │ 添加 recurring_rules (周期记账)                               │
+ * │ V4      │ 添加 templates (模板)                                        │
+ * │ V5      │ 添加 subCategories, transactions 增加 subCategoryId 索引     │
+ * └─────────┴──────────────────────────────────────────────────────────────┘
+ */
 
 import { openDB } from 'idb'
 
 const DEFAULT_DB_NAME = 'QuickBookDB'
-const DB_VERSION = 4
+const DB_VERSION = 6
 
 let db = null
 let currentDbName = null
+
 
 /**
  * 初始化数据库
@@ -23,6 +37,19 @@ export async function initDB(dbName = DEFAULT_DB_NAME) {
     currentDbName = dbName
     db = await openDB(dbName, DB_VERSION, {
         upgrade(database, oldVersion, newVersion, transaction) {
+            // V6 Migration: Add 'synced' index to all tables
+            if (oldVersion < 6) {
+                const stores = ['transactions', 'accounts', 'categories', 'tags', 'persons']
+                for (const storeName of stores) {
+                    if (database.objectStoreNames.contains(storeName)) {
+                        const store = transaction.objectStore(storeName)
+                        if (!store.indexNames.contains('synced')) {
+                            store.createIndex('synced', 'synced')
+                        }
+                    }
+                }
+            }
+
             // 账目表
             if (!database.objectStoreNames.contains('transactions')) {
                 const transactionStore = database.createObjectStore('transactions', {
@@ -35,6 +62,8 @@ export async function initDB(dbName = DEFAULT_DB_NAME) {
                 transactionStore.createIndex('personId', 'personId')
                 transactionStore.createIndex('accountId', 'accountId')
                 transactionStore.createIndex('projectId', 'projectId')
+                transactionStore.createIndex('subCategoryId', 'subCategoryId')
+                transactionStore.createIndex('synced', 'synced')
             }
 
             // 分类表
@@ -44,6 +73,7 @@ export async function initDB(dbName = DEFAULT_DB_NAME) {
                     autoIncrement: true
                 })
                 categoryStore.createIndex('type', 'type')
+                categoryStore.createIndex('synced', 'synced')
 
                 // 添加默认分类（带分组）
                 const defaultCategories = [
@@ -92,6 +122,7 @@ export async function initDB(dbName = DEFAULT_DB_NAME) {
                     keyPath: 'id',
                     autoIncrement: true
                 })
+                tagStore.createIndex('synced', 'synced')
 
                 const defaultTags = [
                     { name: '日常', color: '#4ECDC4' },
@@ -111,6 +142,7 @@ export async function initDB(dbName = DEFAULT_DB_NAME) {
                     keyPath: 'id',
                     autoIncrement: true
                 })
+                personStore.createIndex('synced', 'synced')
 
                 const defaultPersons = [
                     { name: '我', avatar: '👤' },
@@ -129,6 +161,7 @@ export async function initDB(dbName = DEFAULT_DB_NAME) {
                     autoIncrement: true
                 })
                 photoStore.createIndex('transactionId', 'transactionId')
+                photoStore.createIndex('synced', 'synced')
             }
 
             // Account Store (Added in V2)
@@ -137,6 +170,7 @@ export async function initDB(dbName = DEFAULT_DB_NAME) {
                     keyPath: 'id',
                     autoIncrement: true
                 })
+                accountStore.createIndex('synced', 'synced')
 
                 const defaultAccounts = [
                     { name: '现金', icon: '💵', type: 'cash', balance: 0, color: '#4ECDC4' },
@@ -158,6 +192,7 @@ export async function initDB(dbName = DEFAULT_DB_NAME) {
                 })
                 budgetStore.createIndex('categoryId', 'categoryId')
                 budgetStore.createIndex('month', 'month')
+                budgetStore.createIndex('synced', 'synced')
             }
 
             // Project Store (Added in V2)
@@ -200,6 +235,7 @@ export async function initDB(dbName = DEFAULT_DB_NAME) {
                     autoIncrement: true
                 })
                 templateStore.createIndex('type', 'type')
+                templateStore.createIndex('synced', 'synced')
 
                 // 添加默认模板 (空)
                 const defaultTemplates = []
@@ -208,9 +244,45 @@ export async function initDB(dbName = DEFAULT_DB_NAME) {
                     transaction.objectStore('templates').add(t)
                 })
             }
+
+            // SubCategories Store (Added in V5)
+            if (!database.objectStoreNames.contains('subCategories')) {
+                const subStore = database.createObjectStore('subCategories', {
+                    keyPath: 'id',
+                    autoIncrement: true
+                })
+                subStore.createIndex('categoryId', 'categoryId')
+                subStore.createIndex('synced', 'synced')
+
+                const defaultSubCats = [
+                    // 餐饮类子分类样例
+                    { categoryId: 1, name: '午餐' },
+                    { categoryId: 1, name: '晚餐' },
+                    { categoryId: 1, name: '外卖' },
+                    { categoryId: 1, name: '零食' },
+                    // 交通类子分类样例
+                    { categoryId: 11, name: '地铁' },
+                    { categoryId: 11, name: '打车' }
+                ]
+                defaultSubCats.forEach(s => subStore.add(s))
+            }
         }
     })
     return db
+}
+
+/**
+ * 获取数据库实例
+ */
+/**
+ * 关闭数据库连接
+ */
+export function closeDB() {
+    if (db) {
+        db.close()
+        db = null
+        currentDbName = null
+    }
 }
 
 /**

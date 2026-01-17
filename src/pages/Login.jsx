@@ -1,12 +1,16 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { registerUser, loginUser } from '../db/global'
+import { secureStorage } from '../utils/secureStorage'
+import { Camera, CameraResultType, CameraSource, CameraDirection } from '@capacitor/camera'
+import { Camera as CameraIcon, Plus } from 'lucide-react'
 
 function Login() {
     const navigate = useNavigate()
     const [isRegister, setIsRegister] = useState(false)
     const [username, setUsername] = useState('')
     const [password, setPassword] = useState('')
+    const [avatar, setAvatar] = useState(null)
     const [error, setError] = useState('')
 
     const handleSubmit = async (e) => {
@@ -19,14 +23,14 @@ function Login() {
         try {
             let user
             if (isRegister) {
-                user = await registerUser(username, password)
+                user = await registerUser(username, password, avatar)
             } else {
                 user = await loginUser(username, password)
             }
 
-            // Save User Session
-            localStorage.setItem('user_id', user.id)
-            localStorage.setItem('username', user.username)
+            // Save User Session (Secure)
+            secureStorage.set('user_id', user.id)
+            secureStorage.set('username', user.username)
 
             // Redirect to Book List
             navigate('/books')
@@ -35,11 +39,40 @@ function Login() {
         }
     }
 
+    const handleAvatarClick = async () => {
+        try {
+            const image = await Camera.getPhoto({
+                quality: 90,
+                allowEditing: true,
+                resultType: CameraResultType.Base64,
+                source: CameraSource.Prompt,
+                saveToGallery: false,
+                direction: CameraDirection.Front
+            })
+            setAvatar(`data:image/jpeg;base64,${image.base64String}`)
+        } catch (e) {
+            console.log('Camera cancelled', e)
+        }
+    }
+
     return (
         <div className="login-page">
             <div className="login-card">
-                <div className="logo">💰</div>
-                <h1>极速记账</h1>
+                <div className="avatar-container" onClick={handleAvatarClick}>
+                    {avatar ? (
+                        <>
+                            <img src={avatar} alt="Avatar" className="avatar-img" />
+                            <div className="avatar-edit-badge"><Plus size={14} color="#fff" strokeWidth={3} /></div>
+                        </>
+                    ) : (
+                        <div className="avatar-placeholder">
+                            <CameraIcon size={28} color="#fff" />
+                            {isRegister && <span className="avatar-hint">自拍头像</span>}
+                            {!isRegister && <span className="avatar-hint">点击设置</span>}
+                        </div>
+                    )}
+                </div>
+                <h1>快速记账</h1>
                 <p className="subtitle">{isRegister ? '注册新账号，开启财富之旅' : '欢迎回来，登录您的账号'}</p>
 
                 {error && <div className="error-msg">{error}</div>}
@@ -75,20 +108,45 @@ function Login() {
                 .login-page {
                     height: 100vh;
                     display: flex; align-items: center; justify-content: center;
-                    background: linear-gradient(120deg, #84fab0 0%, #8fd3f4 100%);
+                    background: var(--bg-app);
                     padding: 20px;
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
                 }
                 .login-card {
-                    background: rgba(255, 255, 255, 0.95);
+                    background: rgba(255, 255, 255, 0.9);
                     padding: 40px 30px;
                     border-radius: 24px;
-                    box-shadow: 0 20px 60px rgba(0,0,0,0.08);
+                    box-shadow: var(--shadow-float);
                     width: 100%;
                     max-width: 360px;
                     display: flex; flex-direction: column; align-items: center;
                     backdrop-filter: blur(10px);
+                    border: 1px solid rgba(255,255,255,0.6);
                 }
+                .avatar-container {
+                    width: 96px; height: 96px;
+                    border-radius: 50%;
+                    background: var(--primary-gradient);
+                    display: flex; align-items: center; justify-content: center;
+                    margin-bottom: 24px;
+                    cursor: pointer;
+                    box-shadow: 0 8px 16px rgba(0,0,0,0.15);
+                    overflow: hidden;
+                    position: relative;
+                    border: 3px solid #fff;
+                    transition: transform 0.2s;
+                }
+                .avatar-container:active { transform: scale(0.95); }
+                .avatar-img { width: 100%; height: 100%; object-fit: cover; }
+                .avatar-placeholder { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+                .avatar-hint { font-size: 10px; color: rgba(255,255,255,0.95); font-weight: 500; }
+                .avatar-edit-badge {
+                    position: absolute; bottom: 0; right: 0;
+                    width: 24px; height: 24px;
+                    background: #333; border-radius: 50%;
+                    border: 2px solid #fff;
+                    display: flex; align-items: center; justify-content: center;
+                }
+                
                 .logo { 
                     font-size: 56px; 
                     margin-bottom: 16px; 
@@ -98,20 +156,20 @@ function Login() {
                 .logo:hover { transform: scale(1.1) rotate(5deg); }
                 h1 { 
                     font-size: 26px; 
-                    color: #2c3e50; 
+                    color: var(--text-primary); 
                     margin-bottom: 8px; 
                     font-weight: 700;
                     letter-spacing: 1px;
                 }
                 .subtitle { 
-                    color: #7f8c8d; 
+                    color: var(--text-secondary); 
                     margin-bottom: 32px; 
                     font-size: 14px; 
                 }
                 
                 .error-msg {
-                    background: #ffecb3; 
-                    color: #d35400;
+                    background: #FEF2F2; 
+                    color: var(--expense);
                     padding: 12px; 
                     border-radius: 12px; 
                     font-size: 13px;
@@ -122,6 +180,7 @@ function Login() {
                     align-items: center;
                     justify-content: center;
                     font-weight: 500;
+                    border: 1px solid #FECACA;
                 }
 
                 form { width: 100%; display: flex; flex-direction: column; gap: 20px; }
@@ -129,25 +188,25 @@ function Login() {
                 .input-group input {
                     width: 100%;
                     padding: 16px; 
-                    border: 2px solid transparent; 
+                    border: 1px solid transparent; 
                     border-radius: 16px;
-                    background: #f0f2f5; 
+                    background: var(--bg-input); 
                     outline: none; 
                     transition: all 0.3s ease;
                     font-size: 15px;
-                    color: #34495e;
+                    color: var(--text-primary);
                     box-sizing: border-box;
                 }
                 .input-group input:focus { 
-                    border-color: #4CAF50; 
+                    border-color: var(--primary); 
                     background: #fff; 
-                    box-shadow: 0 4px 12px rgba(76, 175, 80, 0.1);
+                    box-shadow: 0 0 0 4px var(--primary-shadow);
                 }
-                .input-group input::placeholder { color: #aab7b8; }
+                .input-group input::placeholder { color: var(--text-muted); }
                 
                 .submit-btn {
                     padding: 16px; 
-                    background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); 
+                    background: var(--primary-gradient); 
                     color: #fff;
                     border: none; 
                     border-radius: 16px; 
@@ -155,24 +214,19 @@ function Login() {
                     font-size: 16px;
                     cursor: pointer; 
                     transition: all 0.3s ease;
-                    box-shadow: 0 10px 20px rgba(67, 233, 123, 0.3);
-                    text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+                    box-shadow: 0 8px 20px var(--primary-shadow);
                 }
-                .submit-btn:hover { 
-                    transform: translateY(-2px);
-                    box-shadow: 0 15px 30px rgba(67, 233, 123, 0.4);
-                }
-                .submit-btn:active { transform: translateY(0); }
+                .submit-btn:active { transform: scale(0.98); }
 
                 .toggle-link {
                     margin-top: 24px; 
-                    color: #95a5a6; 
+                    color: var(--text-muted); 
                     font-size: 14px; 
                     cursor: pointer;
                     transition: color 0.2s;
                     user-select: none;
                 }
-                .toggle-link:hover { color: #4CAF50; text-decoration: underline; }
+                .toggle-link:hover { color: var(--primary); }
             `}</style>
         </div>
     )

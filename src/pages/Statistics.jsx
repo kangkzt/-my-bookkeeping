@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { ArrowLeft, ChevronRight, ChevronLeft, Filter } from 'lucide-react'
+import { ArrowLeft, ChevronRight, ChevronLeft, Filter, X, Calendar } from 'lucide-react'
 import { Doughnut, Line, Bar } from 'react-chartjs-2'
 import { useSwipeable } from 'react-swipeable' // Import
 import { getDB } from '../db/database'
 import { getAllTransactions } from '../db/stores'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Filler } from 'chart.js'
+import DatePickerModal from '../components/DatePickerModal'
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Filler)
 
@@ -47,13 +48,33 @@ function Statistics() {
     const [transactions, setTransactions] = useState([])
     const [accounts, setAccounts] = useState([])
     const [categories, setCategories] = useState([])
-    const [currentDate, setCurrentDate] = useState(new Date())
-    const [dateMode, setDateMode] = useState('year') // 'year' | 'month'
+
+    // Date Init Logic
+    const yearParam = queryParams.get('year')
+    const monthParam = queryParams.get('month')
+    const rangeParam = queryParams.get('range')
+
+    const [currentDate, setCurrentDate] = useState(() => {
+        if (yearParam && monthParam) return new Date(Number(yearParam), Number(monthParam) - 1, 1)
+        if (yearParam) return new Date(Number(yearParam), 0, 1) // If only year is passed
+        const now = new Date()
+        return new Date(now.getFullYear(), now.getMonth(), 1) // Default to 1st of month
+    })
+
+    const [dateMode, setDateMode] = useState(rangeParam === 'year' ? 'year' : rangeParam === 'custom' ? 'custom' : 'month')
+    const [customStart, setCustomStart] = useState(queryParams.get('start') || new Date().toISOString().slice(0, 10))
+    const [customEnd, setCustomEnd] = useState(queryParams.get('end') || new Date().toISOString().slice(0, 10))
+    // Custom Calendar Modal State
+    const [calendarOpen, setCalendarOpen] = useState(false)
+    const [calendarTarget, setCalendarTarget] = useState('start') // 'start' or 'end'
+
     const [timeView, setTimeView] = useState('monthly') // visual style: 'monthly' (trend), 'weekly' (bar)
     const [showDatePicker, setShowDatePicker] = useState(false)
 
     // Helper to format date range display
+    // Helper to format date range display
     const getDateDisplay = () => {
+        if (dateMode === 'custom') return `${customStart} ~ ${customEnd}`
         const y = currentDate.getFullYear()
         if (dateMode === 'year') return `${y}年`
         const m = currentDate.getMonth() + 1
@@ -61,10 +82,13 @@ function Statistics() {
     }
 
     const changeDate = (delta) => {
+        if (dateMode === 'custom') return
         const newDate = new Date(currentDate)
         if (dateMode === 'year') {
             newDate.setFullYear(newDate.getFullYear() + delta)
         } else {
+            // Fix Month Overflow Bug (Jan 31 -> Feb 28/Mar 3)
+            newDate.setDate(1)
             newDate.setMonth(newDate.getMonth() + delta)
         }
         setCurrentDate(newDate)
@@ -90,7 +114,7 @@ function Statistics() {
 
     useEffect(() => {
         loadData()
-    }, [activeTab, catType, timeView, currentDate, dateMode])
+    }, [activeTab, catType, timeView, currentDate, dateMode, customStart, customEnd])
 
     const loadData = async () => {
         // ... (same as before)
@@ -110,6 +134,10 @@ function Statistics() {
         const m = currentDate.getMonth() + 1
 
         const filteredTrans = allTrans.filter(t => {
+            if (dateMode === 'custom') {
+                const dStr = t.date.slice(0, 10)
+                return dStr >= customStart && dStr <= customEnd
+            }
             const d = new Date(t.date)
             if (dateMode === 'year') {
                 return d.getFullYear() === y
@@ -130,7 +158,7 @@ function Statistics() {
         } else if (activeTab === 'account') {
             processAccountData(allAccs, allTrans)
         } else if (activeTab === 'category') {
-            processCategoryData(allTrans, allCats, catType)
+            processCategoryData(filteredTrans, allCats, catType)
         } else if (activeTab === 'merchant') {
             processMerchantData(allTrans)
         }
@@ -181,11 +209,13 @@ function Statistics() {
         // 2. Income Sources (Top 3)
         const incCats = {}
         trans.filter(t => t.type === 'income').forEach(t => {
-            incCats[t.categoryId] = (incCats[t.categoryId] || 0) + Number(t.amount)
+            const key = `${t.categoryId}|${t.subCategory || ''}`
+            incCats[key] = (incCats[key] || 0) + Number(t.amount)
         })
-        let topIncome = Object.keys(incCats).map(cid => {
-            const cat = cats.find(c => c.id === Number(cid)) || { name: '未知', icon: '❓' }
-            return { name: cat.name, icon: cat.icon, amount: incCats[cid], id: cat.id }
+        let topIncome = Object.keys(incCats).map(key => {
+            const [cid, subName] = key.split('|')
+            const cat = cats.find(c => c.id === Number(cid)) || { name: '未知', icon: '❓', id: Number(cid) }
+            return { name: cat.name, subName, icon: cat.icon, amount: incCats[key], id: cat.id }
         }).sort((a, b) => b.amount - a.amount).slice(0, 3)
 
         // Default if empty
@@ -198,11 +228,13 @@ function Statistics() {
         // 3. Expense Distribution (Top 1)
         const expCats = {}
         trans.filter(t => t.type === 'expense').forEach(t => {
-            expCats[t.categoryId] = (expCats[t.categoryId] || 0) + Number(t.amount)
+            const key = `${t.categoryId}|${t.subCategory || ''}`
+            expCats[key] = (expCats[key] || 0) + Number(t.amount)
         })
-        let topExpense = Object.keys(expCats).map(cid => {
-            const cat = cats.find(c => c.id === Number(cid)) || { name: '未知', icon: '❓' }
-            return { name: cat.name, icon: cat.icon, amount: expCats[cid], id: cat.id }
+        let topExpense = Object.keys(expCats).map(key => {
+            const [cid, subName] = key.split('|')
+            const cat = cats.find(c => c.id === Number(cid)) || { name: '未知', icon: '❓', id: Number(cid) }
+            return { name: cat.name, subName, icon: cat.icon, amount: expCats[key], id: cat.id }
         }).sort((a, b) => b.amount - a.amount).slice(0, 1)
 
         // Default if empty
@@ -309,17 +341,21 @@ function Statistics() {
 
         const map = {}
         filtered.forEach(t => {
-            map[t.categoryId] = (map[t.categoryId] || 0) + Number(t.amount)
+            const key = `${t.categoryId}|${t.subCategory || ''}`
+            map[key] = (map[key] || 0) + Number(t.amount)
         })
 
-        const list = Object.keys(map).map(cid => {
+        const list = Object.keys(map).map(key => {
+            const [cid, subName] = key.split('|')
             const cat = cats.find(c => c.id === Number(cid)) || { name: '未知', icon: '❓', color: '#ccc' }
             return {
+                id: Number(cid),
                 name: cat.name,
+                subName,
                 icon: cat.icon,
                 color: cat.color,
-                amount: map[cid],
-                percent: total > 0 ? (map[cid] / total) : 0
+                amount: map[key],
+                percent: total > 0 ? (map[key] / total) : 0
             }
         }).sort((a, b) => b.amount - a.amount)
 
@@ -350,10 +386,9 @@ function Statistics() {
 
     return (
         <div className="page statistics-page" {...handlers}>
-            <div className="page-header">
-                <button className="back-btn" onClick={() => navigate(-1)}><ArrowLeft size={24} /></button>
-                <h1>报表</h1>
-                <div className="tabs-scroll">
+            <div className="page-header" style={{ display: 'flex', alignItems: 'center', paddingBottom: 0 }}>
+                <button className="back-btn" onClick={() => navigate(-1)} style={{ zIndex: 10, paddingLeft: 16, paddingRight: 4 }}><ArrowLeft size={22} /></button>
+                <div className="tabs-scroll" style={{ flex: 1, paddingLeft: 0 }}>
                     {TABS.map(tab => (
                         <div key={tab.key} className={`tab-item ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)}>
                             {tab.label}
@@ -362,17 +397,34 @@ function Statistics() {
                 </div>
             </div>
 
-            <div className="date-filter">
-                <button className="nav-arrow" onClick={() => changeDate(-1)}><ChevronLeft size={20} /></button>
-                <div className="date-display-wrapper" onClick={() => setShowDatePicker(true)}>
-                    <span className="date-display">
-                        📅 {getDateDisplay()}
+            <div className="date-filter" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, padding: '12px 0' }}>
+                {dateMode !== 'custom' && (
+                    <button className="nav-arrow" onClick={() => changeDate(-1)} style={{ background: 'white', border: 'none', borderRadius: '50%', width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', color: '#666' }}>
+                        <ChevronLeft size={18} />
+                    </button>
+                )}
+                <div className="date-display-wrapper" onClick={() => setShowDatePicker(true)}
+                    style={{
+                        background: 'white',
+                        padding: '8px 20px',
+                        borderRadius: 24,
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+                        display: 'flex', flexDirection: 'column', alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '1px solid rgba(0,0,0,0.02)'
+                    }}>
+                    <span className="date-display" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 16, fontWeight: 600, color: '#333' }}>
+                        <Calendar size={16} color="#FFB800" /> {getDateDisplay()}
                     </span>
-                    <span className="mode-hint">({dateMode === 'year' ? '按年' : '按月'})</span>
+                    <span className="mode-hint" style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+                        {dateMode === 'custom' ? '自定义范围' : dateMode === 'year' ? '(按年统计)' : '(按月统计)'}
+                    </span>
                 </div>
-                <button className="nav-arrow" onClick={() => changeDate(1)}><ChevronRight size={20} /></button>
-
-
+                {dateMode !== 'custom' && (
+                    <button className="nav-arrow" onClick={() => changeDate(1)} style={{ background: 'white', border: 'none', borderRadius: '50%', width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', color: '#666' }}>
+                        <ChevronRight size={18} />
+                    </button>
+                )}
             </div>
 
             <div className="content-scroll">
@@ -426,8 +478,11 @@ function Statistics() {
                                             {basicData.topIncome.map((item, i) => (
                                                 <div key={i} className="list-row" onClick={() => navigate(`/records?categoryId=${item.id || ''}&range=${dateMode}&date=${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-01`)}>
                                                     <span className="row-rank">{i + 1}</span>
-                                                    <span className="row-icon">{item.icon}</span>
-                                                    <span className="row-name">{item.name}</span>
+                                                    <span className="row-icon" style={{ width: 36, height: 36, borderRadius: '50%', background: 'linear-gradient(135deg, #FFF3E0 0%, #FFE0B2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, boxShadow: '0 2px 8px rgba(255,152,0,0.2)' }}>{item.icon}</span>
+                                                    <span className="row-name">
+                                                        {item.name}
+                                                        {item.subName && <span style={{ fontSize: 11, color: '#999', fontWeight: 400, marginLeft: 4 }}>· {item.subName}</span>}
+                                                    </span>
                                                     <span className="row-amount">{formatAmount(item.amount)}</span>
                                                 </div>
                                             ))}
@@ -439,8 +494,11 @@ function Statistics() {
                                             {basicData.topExpense.map((item, i) => (
                                                 <div key={i} className="list-row-bar" onClick={() => navigate(`/records?categoryId=${item.id || ''}&range=${dateMode}&date=${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-01`)}>
                                                     <div className="row-header">
-                                                        <span className="row-icon">{item.icon}</span>
-                                                        <span className="row-name">{item.name}</span>
+                                                        <span className="row-icon" style={{ width: 36, height: 36, borderRadius: '50%', background: 'linear-gradient(135deg, #FFEBEE 0%, #FFCDD2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, boxShadow: '0 2px 8px rgba(244,67,54,0.15)' }}>{item.icon}</span>
+                                                        <span className="row-name">
+                                                            {item.name}
+                                                            {item.subName && <span style={{ fontSize: 11, color: '#999', fontWeight: 400, marginLeft: 4 }}>· {item.subName}</span>}
+                                                        </span>
                                                         <span className="row-percent">
                                                             {basicData.totalExpense > 0 ? ((item.amount / basicData.totalExpense) * 100).toFixed(2) : '0.00'}%
                                                         </span>
@@ -466,8 +524,8 @@ function Statistics() {
                                                 <Line data={{
                                                     labels: basicData.monthlyData.map(d => d.m + '月'),
                                                     datasets: [
-                                                        { label: '支出', data: basicData.monthlyData.map(d => (d.exp)), borderColor: '#4ECDC4', backgroundColor: '#4ECDC4', pointRadius: 2, tension: 0.4 },
-                                                        { label: '收入', data: basicData.monthlyData.map(d => (d.inc)), borderColor: '#FFB800', backgroundColor: '#FFB800', pointRadius: 2, tension: 0.4 },
+                                                        { label: '支出', data: basicData.monthlyData.map(d => (d.exp)), borderColor: '#10B981', backgroundColor: '#10B981', pointRadius: 2, tension: 0.4 },
+                                                        { label: '收入', data: basicData.monthlyData.map(d => (d.inc)), borderColor: '#EF4444', backgroundColor: '#EF4444', pointRadius: 2, tension: 0.4 },
                                                     ]
                                                 }} options={{
                                                     maintainAspectRatio: false,
@@ -537,8 +595,8 @@ function Statistics() {
                                                         <Bar data={{
                                                             labels: weeklyData.weeks.map(d => d.label),
                                                             datasets: [
-                                                                { label: '支出', data: weeklyData.weeks.map(d => (d.expense)), backgroundColor: '#4ECDC4', borderRadius: 4 },
-                                                                { label: '收入', data: weeklyData.weeks.map(d => (d.income)), backgroundColor: '#FFB800', borderRadius: 4 },
+                                                                { label: '支出', data: weeklyData.weeks.map(d => (d.expense)), backgroundColor: '#10B981', borderRadius: 4 },
+                                                                { label: '收入', data: weeklyData.weeks.map(d => (d.income)), backgroundColor: '#EF4444', borderRadius: 4 },
                                                             ]
                                                         }} options={{ maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false } }, y: { display: false } } }} />
                                                     </div>
@@ -549,8 +607,8 @@ function Statistics() {
                                                         <div key={i} className="list-row">
                                                             <span className="row-name">{w.key} ({w.label})</span>
                                                             <div className="row-right" style={{ textAlign: 'right' }}>
-                                                                <div className="row-amount" style={{ color: '#4ECDC4' }}>-{formatAmount(w.expense)}</div>
-                                                                <div className="row-amount" style={{ color: '#FFB800', fontSize: 12 }}>+{formatAmount(w.income)}</div>
+                                                                <div className="row-amount" style={{ color: '#10B981' }}>-{formatAmount(w.expense)}</div>
+                                                                <div className="row-amount" style={{ color: '#EF4444', fontSize: 12 }}>+{formatAmount(w.income)}</div>
                                                             </div>
                                                         </div>
                                                     ))}
@@ -566,8 +624,11 @@ function Statistics() {
                                     {basicData.topIncome.map((item, i) => (
                                         <div key={i} className="list-row">
                                             <span className="row-rank">{i + 1}</span>
-                                            <span className="row-icon">{item.icon}</span>
-                                            <span className="row-name">{item.name}</span>
+                                            <span className="row-icon" style={{ width: 36, height: 36, borderRadius: '50%', background: 'linear-gradient(135deg, #FFF3E0 0%, #FFE0B2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, boxShadow: '0 2px 8px rgba(255,152,0,0.2)' }}>{item.icon}</span>
+                                            <span className="row-name">
+                                                {item.name}
+                                                {item.subName && <span style={{ fontSize: 11, color: '#999', fontWeight: 400, marginLeft: 4 }}>· {item.subName}</span>}
+                                            </span>
                                             <span className="row-amount">{formatAmount(item.amount)}</span>
                                         </div>
                                     ))}
@@ -579,8 +640,11 @@ function Statistics() {
                                     {basicData.topExpense.map((item, i) => (
                                         <div key={i} className="list-row-bar">
                                             <div className="row-header">
-                                                <span className="row-icon">{item.icon}</span>
-                                                <span className="row-name">{item.name}</span>
+                                                <span className="row-icon" style={{ width: 36, height: 36, borderRadius: '50%', background: 'linear-gradient(135deg, #FFEBEE 0%, #FFCDD2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, boxShadow: '0 2px 8px rgba(244,67,54,0.15)' }}>{item.icon}</span>
+                                                <span className="row-name">
+                                                    {item.name}
+                                                    {item.subName && <span style={{ fontSize: 11, color: '#999', fontWeight: 400, marginLeft: 4 }}>· {item.subName}</span>}
+                                                </span>
                                                 <span className="row-percent">100.00%</span>
                                                 <span className="row-amount">{formatAmount(item.amount)}</span>
                                             </div>
@@ -637,10 +701,13 @@ function Statistics() {
                         {/* List */}
                         <div className="section-card">
                             {categoryData.list.map((c, i) => (
-                                <div key={i} className="list-row-bar" onClick={() => navigate(`/records?categoryId=${c.id}&range=${dateMode}&date=${currentDate.year}-${String(currentDate.month).padStart(2, '0')}-01`)}>
+                                <div key={i} className="list-row-bar" onClick={() => navigate(`/records?categoryId=${c.id}&range=${dateMode}&date=${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-01${c.subName ? `&subCategory=${encodeURIComponent(c.subName)}` : ''}`)}>
                                     <div className="row-header">
                                         <span className="row-icon">{c.icon}</span>
-                                        <span className="row-name">{c.name}</span>
+                                        <span className="row-name">
+                                            {c.name}
+                                            {c.subName && <span style={{ fontSize: 11, color: '#999', fontWeight: 400, marginLeft: 4 }}>· {c.subName}</span>}
+                                        </span>
                                         <span className="row-percent">{(c.percent * 100).toFixed(1)}%</span>
                                         <span className="row-amount">{formatAmount(c.amount)}</span>
                                     </div>
@@ -659,7 +726,7 @@ function Statistics() {
                     <>
                         <div className="stat-card white">
                             <div className="card-content centered">
-                                <span className="label-icon">🏪</span>
+                                <span className="label-icon" style={{ width: 48, height: 48, borderRadius: '50%', background: 'linear-gradient(135deg, #E3F2FD 0%, #BBDEFB 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>🏪</span>
                                 <span className="label">商家总支出</span>
                                 <div className="main-value-dark">
                                     <span className="amount">¥{formatAmount(merchantData.total)}</span>
@@ -689,7 +756,7 @@ function Statistics() {
                     <>
                         <div className="stat-card white">
                             <div className="card-content centered">
-                                <span className="label-icon">📊</span>
+                                <span className="label-icon" style={{ width: 48, height: 48, borderRadius: '50%', background: 'linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>📊</span>
                                 <span className="label">总结余</span>
                                 <div className="main-value-dark">
                                     <span className="unit">结余</span>
@@ -703,7 +770,7 @@ function Statistics() {
                             {projectData.list.map((p, i) => (
                                 <div key={i} className="list-row" onClick={() => navigate(`/records?projectId=${p.id}&range=${dateMode}&date=${currentDate.year}-${String(currentDate.month).padStart(2, '0')}-01`)}>
                                     <span className="row-rank">{i + 1}</span>
-                                    <span className="row-icon">{p.icon}</span>
+                                    <span className="row-icon" style={{ width: 36, height: 36, borderRadius: '50%', background: 'linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, boxShadow: '0 2px 8px rgba(76,175,80,0.2)' }}>{p.icon}</span>
                                     <span className="row-name">{p.name}</span>
                                     <span className="row-amount">{formatAmount(p.inc)}</span>
                                 </div>
@@ -714,7 +781,7 @@ function Statistics() {
                             {projectData.list.map((p, i) => (
                                 <div key={i} className="list-row" onClick={() => navigate(`/records?projectId=${p.id}&range=${dateMode}&date=${currentDate.year}-${String(currentDate.month).padStart(2, '0')}-01`)}>
                                     <span className="row-rank">{i + 1}</span>
-                                    <span className="row-icon">{p.icon}</span>
+                                    <span className="row-icon" style={{ width: 36, height: 36, borderRadius: '50%', background: 'linear-gradient(135deg, #FFEBEE 0%, #FFCDD2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, boxShadow: '0 2px 8px rgba(244,67,54,0.15)' }}>{p.icon}</span>
                                     <span className="row-name">{p.name}</span>
                                     <span className="row-amount">{formatAmount(p.exp)}</span>
                                 </div>
@@ -788,17 +855,35 @@ function Statistics() {
                 .back-btn { padding: 10px; border: none; background: none; }
                 .page-header h1 { text-align: center; font-size: 17px; font-weight: 600; margin-top: -36px; margin-bottom: 10px; pointer-events: none; }
                 
-                .tabs-scroll { display: flex; overflow-x: auto; padding: 0 4px; border-bottom: none; background: #fff; }
-                .tab-item { padding: 12px 16px; font-size: 15px; color: #666; white-space: nowrap; transition: all 0.2s; }
-                .tab-item.active { color: #333; font-weight: 600; font-size: 16px; }
+                .tabs-scroll { 
+                    display: flex; overflow-x: auto; padding: 0 4px; border-bottom: none; background: #fff; 
+                    scrollbar-width: none; -ms-overflow-style: none;
+                }
+                .tabs-scroll::-webkit-scrollbar { display: none; }
+
+                .tab-item { 
+                    padding: 12px 16px; font-size: 15px; color: #666; white-space: nowrap; transition: all 0.2s; 
+                    position: relative;
+                }
+                .tab-item.active { 
+                    color: #333; font-weight: 600; font-size: 16px; 
+                }
+                .tab-item.active::after {
+                    content: ''; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
+                    width: 20px; height: 3px; background: #FFB800; border-radius: 2px;
+                }
                 
                 .date-filter { 
-                    background: #fff; padding: 10px; margin-top: 1px; margin-bottom: 12px;
-                    display: flex; align-items: center; justify-content: center; gap: 15px;
+                    background: #fff; padding: 10px 0; margin-top: 1px; margin-bottom: 12px;
+                    display: flex; align-items: center; justify-content: center; gap: 20px;
                 }
-                .nav-arrow { background: none; border: none; padding: 8px; color: #999; display: flex; align-items: center; }
-                .date-display { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 6px; cursor: pointer; color: #333; }
-                .mode-hint { font-size: 11px; color: #999; font-weight: normal; }
+                .nav-arrow { 
+                    background: #f5f5f5; border: none; padding: 0; 
+                    width: 32px; height: 32px; border-radius: 50%;
+                    color: #666; display: flex; align-items: center; justify-content: center; 
+                }
+                .date-display-wrapper { display: flex; flex-direction: column; align-items: center; cursor: pointer; }
+                .date-display { font-weight: 600; font-size: 16px; display: flex; align-items: center; gap: 6px; color: #333; }
                 .view-switch-btn { 
                     margin-left: 10px; font-size: 12px; color: #4ECDC4; 
                     border: 1px solid #4ECDC4; padding: 2px 8px; 
@@ -1003,6 +1088,12 @@ function Statistics() {
                             >
                                 年
                             </button>
+                            <button
+                                className={`picker-tab ${dateMode === 'custom' ? 'active' : ''}`}
+                                onClick={() => setDateMode('custom')}
+                            >
+                                自定义
+                            </button>
                         </div>
 
                         {dateMode === 'year' && (
@@ -1053,6 +1144,7 @@ function Statistics() {
                                             className={`grid-item ${currentDate.getMonth() + 1 === m ? 'active' : ''}`}
                                             onClick={() => {
                                                 const newDate = new Date(currentDate)
+                                                newDate.setDate(1) // Safety
                                                 newDate.setMonth(m - 1)
                                                 setCurrentDate(newDate)
                                                 setShowDatePicker(false)
@@ -1064,6 +1156,79 @@ function Statistics() {
                                 </div>
                             </>
                         )}
+
+                        {dateMode === 'custom' && (
+                            <div style={{ padding: '0 20px', animation: 'fadeIn 0.3s' }}>
+                                {/* Quick Shortcuts */}
+                                <div style={{ display: 'flex', gap: 10, marginBottom: 16, overflowX: 'auto', paddingBottom: 4 }}>
+                                    <button onClick={() => {
+                                        const d = new Date(); d.setDate(d.getDate() - 6);
+                                        setCustomStart(d.toISOString().slice(0, 10));
+                                        setCustomEnd(new Date().toISOString().slice(0, 10));
+                                    }} style={{ padding: '6px 12px', borderRadius: 20, border: '1px solid #eee', background: '#fff', fontSize: 12 }}>近7天</button>
+                                    <button onClick={() => {
+                                        const d = new Date(); d.setDate(d.getDate() - 29);
+                                        setCustomStart(d.toISOString().slice(0, 10));
+                                        setCustomEnd(new Date().toISOString().slice(0, 10));
+                                    }} style={{ padding: '6px 12px', borderRadius: 20, border: '1px solid #eee', background: '#fff', fontSize: 12 }}>近30天</button>
+                                    <button onClick={() => {
+                                        const now = new Date();
+                                        const start = new Date(now.getFullYear(), now.getMonth(), 1);
+                                        const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                                        setCustomStart(start.toISOString().slice(0, 10));
+                                        setCustomEnd(end.toISOString().slice(0, 10));
+                                    }} style={{ padding: '6px 12px', borderRadius: 20, border: '1px solid #eee', background: '#fff', fontSize: 12 }}>本月</button>
+                                    <button onClick={() => {
+                                        const now = new Date();
+                                        const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                                        const end = new Date(now.getFullYear(), now.getMonth(), 0);
+                                        setCustomStart(start.toISOString().slice(0, 10));
+                                        setCustomEnd(end.toISOString().slice(0, 10));
+                                    }} style={{ padding: '6px 12px', borderRadius: 20, border: '1px solid #eee', background: '#fff', fontSize: 12 }}>上月</button>
+                                </div>
+
+                                <div style={{ background: '#f8f8f8', borderRadius: 12, padding: '0 16px', marginBottom: 20 }}>
+                                    <div style={{ position: 'relative', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', borderBottom: '1px solid #eee', cursor: 'pointer' }}
+                                        onClick={() => { setCalendarTarget('start'); setCalendarOpen(true); }}>
+                                        <span style={{ fontSize: 15 }}>开始日期</span>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#333' }}>
+                                            {customStart} <ChevronRight size={16} color="#ccc" />
+                                        </div>
+                                    </div>
+                                    <div style={{ position: 'relative', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', cursor: 'pointer' }}
+                                        onClick={() => { setCalendarTarget('end'); setCalendarOpen(true); }}>
+                                        <span style={{ fontSize: 15 }}>结束日期</span>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#333' }}>
+                                            {customEnd} <ChevronRight size={16} color="#ccc" />
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style={{ textAlign: 'center' }}>
+                                    <button onClick={() => {
+                                        const p = new URLSearchParams(window.location.search)
+                                        p.set('range', 'custom')
+                                        p.set('start', customStart)
+                                        p.set('end', customEnd)
+                                        navigate(`${location.pathname}?${p.toString()}`, { replace: true })
+                                        setShowDatePicker(false)
+                                    }} style={{ width: '100%', background: '#FFB800', color: '#fff', padding: '12px', borderRadius: 12, border: 'none', fontWeight: '600', fontSize: 15 }}>
+                                        确认
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Custom Calendar Modal */}
+                        <DatePickerModal
+                            isOpen={calendarOpen}
+                            onClose={() => setCalendarOpen(false)}
+                            title={calendarTarget === 'start' ? "选择开始日期" : "选择结束日期"}
+                            initialDate={calendarTarget === 'start' ? customStart : customEnd}
+                            onSelect={(date) => {
+                                if (calendarTarget === 'start') setCustomStart(date)
+                                else setCustomEnd(date)
+                            }}
+                        />
                     </div>
                 </div>
             )}

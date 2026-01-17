@@ -22,6 +22,8 @@ import Login from './pages/Login'
 import Navigation from './components/Navigation'
 import { initDB, getDB } from './db/database'
 import { addTransaction } from './db/stores'
+import { secureStorage } from './utils/secureStorage'
+import { logger } from './utils/logger'
 
 function App() {
     const navigate = useNavigate()
@@ -31,8 +33,9 @@ function App() {
 
     useEffect(() => {
         const init = async () => {
-            const userId = localStorage.getItem('user_id')
-            const dbName = localStorage.getItem('current_db_name')
+            // 优先从 secureStorage 获取，兼容从 localStorage 迁移
+            const userId = secureStorage.get('user_id') || secureStorage.migrateFromLocalStorage('user_id')
+            const dbName = secureStorage.get('current_db_name') || secureStorage.migrateFromLocalStorage('current_db_name')
             const isPublicRoute = ['/login'].includes(location.pathname)
             const isBookList = location.pathname === '/books'
 
@@ -45,7 +48,7 @@ function App() {
                     return
                 } else {
                     // 其他页面重定向到登录
-                    setLoading(false)
+                    // setLoading(false) // 保持 Loading 状态直到跳转完成
                     return navigate('/login')
                 }
             }
@@ -61,7 +64,7 @@ function App() {
 
                 // 如果未选择账本，且不在账本页，强制跳转
                 if (!dbName) {
-                    setLoading(false)
+                    // setLoading(false) // 保持 Loading 状态直到跳转完成
                     return navigate('/books')
                 }
 
@@ -71,7 +74,7 @@ function App() {
                     setDbReady(true)
                     checkRecurringRules()
                 } catch (error) {
-                    console.error('数据库初始化失败:', error)
+                    logger.error('数据库初始化失败:', error)
                     // dbReady 保持 false，显示错误页
                 } finally {
                     setLoading(false)
@@ -131,7 +134,7 @@ function App() {
                 }
             }
         } catch (error) {
-            console.error('周期记账检查失败:', error)
+            logger.error('周期记账检查失败:', error)
         }
     }
 
@@ -175,7 +178,7 @@ function App() {
         )
     }
 
-    const showNav = location.pathname === '/'
+    const showNav = ['/', '/records', '/statistics', '/calendar', '/settings'].includes(location.pathname)
 
     return (
         <div className="app">

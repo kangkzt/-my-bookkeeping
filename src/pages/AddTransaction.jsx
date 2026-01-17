@@ -1,5 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { ChevronLeft, ChevronRight, ChevronDown, Camera, Check, Grid, CreditCard, FileText, Calendar, Users, Store, FolderKanban, X, Delete, ArrowRightLeft, Loader2, Mic } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, Camera as CameraIcon, Check, Grid, CreditCard, FileText, Calendar, Users, Store, FolderKanban, X, Delete, ArrowRightLeft, Loader2, Mic, Reply, Bookmark, Keyboard } from 'lucide-react'
+import { Camera, CameraResultType, CameraSource } from '@capacitor/camera'
+import { SpeechRecognition } from '@capacitor-community/speech-recognition'
+import { Capacitor } from '@capacitor/core'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useSwipeable } from 'react-swipeable'
 import { getDB } from '../db/database'
@@ -8,38 +11,38 @@ import { recognizeReceipt } from '../utils/ocr'
 import { parseVoiceInput } from '../utils/nlp'
 import './AddTransaction.css'
 
-// 分类组定义
-const categoryGroups = [
-  { key: 'food', name: '食品酒水' },
-  { key: 'living', name: '居家生活' },
-  { key: 'transport', name: '行车交通' },
-  { key: 'communication', name: '交流通讯' },
-  { key: 'entertainment', name: '休闲娱乐' },
-  { key: 'social', name: '人情往来' },
-  { key: 'health', name: '医疗保健' },
-  { key: 'finance', name: '金融保险' },
-  { key: 'other', name: '其他' }
-]
+// Add CSS for pulse
+const style = document.createElement('style');
+style.innerHTML = `
+  @keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
+  }
+  .pulse-anim { animation: pulse 1s infinite; }
+`;
+document.head.appendChild(style);
+
+const formatDateCN = (isoStr) => {
+  if (!isoStr) return ''
+  const d = new Date(isoStr)
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 
 function AddTransaction() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const editId = searchParams.get('editId') || searchParams.get('edit')
-  const templateId = searchParams.get('templateId')
   const dateParam = searchParams.get('date')
 
-  // 基础状态
   const [type, setType] = useState('expense')
   const [amount, setAmount] = useState('0.00')
   const [expression, setExpression] = useState('')
   const [isEditingAmount, setIsEditingAmount] = useState(true)
-  const [loanType, setLoanType] = useState('debt_out') // 'debt_out' (借出), 'debt_in' (借入)
-  const [balanceType, setBalanceType] = useState('increase') // 'increase' (增加), 'decrease' (减少)
-  const [noStats, setNoStats] = useState(false)
-  const [noBudget, setNoBudget] = useState(false)
-  const [showKeyboard, setShowKeyboard] = useState(true) // 默认显示键盘
+  const [loanType, setLoanType] = useState('debt_out')
+  const [balanceType, setBalanceType] = useState('increase')
+  const [showKeyboard, setShowKeyboard] = useState(true)
 
-  // 表单数据
   const [categoryId, setCategoryId] = useState(null)
   const [accountId, setAccountId] = useState(null)
   const [toAccountId, setToAccountId] = useState(null)
@@ -51,76 +54,338 @@ function AddTransaction() {
   const [personId, setPersonId] = useState(null)
   const [merchantName, setMerchantName] = useState('')
   const [projectName, setProjectName] = useState('')
+  const [subCategory, setSubCategory] = useState('')
 
-  // 数据源
   const [categories, setCategories] = useState([])
   const [accounts, setAccounts] = useState([])
   const [persons, setPersons] = useState([])
   const [merchants, setMerchants] = useState([])
   const [projects, setProjects] = useState([])
 
-  // Modal
+  // Modals
   const [showCategoryModal, setShowCategoryModal] = useState(false)
+  const [showSubCatModal, setShowSubCatModal] = useState(false)
   const [showAccountModal, setShowAccountModal] = useState(false)
   const [showToAccountModal, setShowToAccountModal] = useState(false)
   const [showPersonModal, setShowPersonModal] = useState(false)
-  const [showMerchantModal, setShowMerchantModal] = useState(false)
-  const [showProjectModal, setShowProjectModal] = useState(false)
 
-  // OCR Status
-  // OCR & Voice Status
+  // Media
   const [recognizing, setRecognizing] = useState(false)
-  const [showVoicePermissionModal, setShowVoicePermissionModal] = useState(false)
-  const ocrTimeoutRef = useRef(null)
-  const [ocrProgress, setOcrProgress] = useState(0)
-  const [photoFile, setPhotoFile] = useState(null)
+  const [photoFiles, setPhotoFiles] = useState([])
   const [savedPhotos, setSavedPhotos] = useState([])
-  const [listening, setListening] = useState(false)
-  const [showVoiceTextModal, setShowVoiceTextModal] = useState(false)  // 文字输入替代语音
+  const [showVoiceTextModal, setShowVoiceTextModal] = useState(false)
+  const [isOCR, setIsOCR] = useState(false)
+  const [ocrProgress, setOcrProgress] = useState(0)
+  const [previewIndex, setPreviewIndex] = useState(-1)
+  const [showSourceModal, setShowSourceModal] = useState(false)
   const [voiceTextInput, setVoiceTextInput] = useState('')
+  const [webRecognition, setWebRecognition] = useState(null)
+  const fileInputRef = useRef(null)
 
-  const [previewImage, setPreviewImage] = useState(null)
-  const newPhotoUrl = useMemo(() => photoFile ? URL.createObjectURL(photoFile) : null, [photoFile])
+  // Combined Photos Helper
+  const allPhotos = useMemo(() => {
+    const saved = savedPhotos.map(p => ({ ...p, isNew: false, url: p.data }))
+    const newFiles = photoFiles.map(f => ({ file: f, isNew: true, url: URL.createObjectURL(f) }))
+    return [...saved, ...newFiles]
+  }, [savedPhotos, photoFiles])
 
-  // 处理文字输入（替代语音）
-  const handleVoiceTextSubmit = () => {
-    const text = voiceTextInput.trim()
-    if (!text) {
-      setShowVoiceTextModal(false)
+  /* Camera Handlers */
+  const handleCameraClick = () => {
+    // Web Fallback
+    if (!Capacitor.isNativePlatform()) {
+      fileInputRef.current?.click()
+      return
+    }
+    setShowSourceModal(true)
+  }
+
+  const handleTakePhoto = async () => {
+    try {
+      const image = await Camera.getPhoto({
+        quality: 90,
+        allowEditing: false,
+        resultType: CameraResultType.Uri,
+        source: CameraSource.Camera
+      })
+      const response = await fetch(image.webPath)
+      const blob = await response.blob()
+      const file = new File([blob], `camera_${Date.now()}.jpg`, { type: "image/jpeg" })
+      processFile(file)
+      setShowSourceModal(false)
+    } catch (e) {
+      console.log('Camera error:', e)
+    }
+  }
+
+  const handlePickFromGallery = async () => {
+    try {
+      const { photos } = await Camera.pickImages({ quality: 90, limit: 9 })
+      if (photos.length > 0) {
+        for (const p of photos) {
+          const response = await fetch(p.webPath)
+          const blob = await response.blob()
+          const file = new File([blob], `gallery_${Date.now()}.jpg`, { type: "image/jpeg" })
+          processFile(file)
+        }
+      }
+      setShowSourceModal(false)
+    } catch (e) {
+      console.log('Pick error:', e)
+    }
+  }
+
+  const handlePhotoChange = (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      Array.from(e.target.files).forEach(file => processFile(file))
+    }
+  }
+
+  const processFile = async (file) => {
+    if (!file) return
+
+    setPhotoFiles(prev => [...prev, file])
+    setIsOCR(true)
+    setOcrProgress(0)
+
+    // Simulate progress behavior (clamp at 90% until done)
+    const progressInterval = setInterval(() => {
+      setOcrProgress(prev => prev < 90 ? prev + 5 : prev)
+    }, 500)
+
+    try {
+      const ocrTask = recognizeReceipt(file)
+      // Extend timeout to 45s for mobile (Tesseract + Network)
+      const timeoutTask = new Promise((_, reject) => setTimeout(() => reject(new Error('识别超时 (45s)')), 45000))
+
+      const text = await Promise.race([ocrTask, timeoutTask])
+
+      clearInterval(progressInterval)
+      setOcrProgress(100)
+
+      if (text) {
+        // 1. Amount & Date
+        if (text.amount) {
+          const val = parseFloat(String(text.amount).replace(/,/g, ''))
+          if (!isNaN(val) && val > 0) {
+            let currentTotal = 0
+            if (expression) {
+              currentTotal = calculateResult(expression)
+            } else {
+              currentTotal = parseFloat(amount) || 0
+            }
+            const newTotal = currentTotal + val
+            setAmount(newTotal.toFixed(2))
+            setExpression('') // Show only result
+          }
+        }
+        if (text.date) setDate(text.date)
+        if (text.merchant) setMerchantName(text.merchant)
+
+        const rawText = [text.merchant, ...(text.items || [])].join(' ')
+
+        // 2. Smart Category Matching
+        const matchedCat = categories.find(c => rawText.includes(c.name))
+        if (matchedCat) {
+          setCategoryId(matchedCat.id)
+          if (matchedCat.type !== type) setType(matchedCat.type)
+        }
+
+        // 3. Smart Account Matching
+        if (rawText.includes('支付宝') || rawText.includes('Alipay')) {
+          const acc = accounts.find(a => a.name.includes('支付宝') || a.name.includes('Alipay'))
+          if (acc) setAccountId(acc.id)
+        } else if (rawText.includes('微信') || rawText.includes('WeChat')) {
+          const acc = accounts.find(a => a.name.includes('微信') || a.name.includes('WeChat'))
+          if (acc) setAccountId(acc.id)
+        }
+
+        // REMOVED: Auto Remark logic
+      }
+    } catch (e) {
+      clearInterval(progressInterval)
+      console.error('OCR Error:', e)
+      alert(`识别失败: ${e.message}`)
+    } finally {
+      setTimeout(() => {
+        setIsOCR(false)
+        setOcrProgress(0)
+      }, 500)
+    }
+  }
+
+  const adjustDate = (delta) => {
+    const d = new Date(date)
+    d.setDate(d.getDate() + delta)
+    const offsetDate = new Date(d.getTime() - (d.getTimezoneOffset() * 60000))
+    setDate(offsetDate.toISOString().slice(0, 16))
+  }
+
+  /* Voice Logic Fix: Use Ref for latest value */
+  const voiceTextRef = useRef('')
+  const [isProcessing, setIsProcessing] = useState(false)
+
+  useEffect(() => {
+    voiceTextRef.current = voiceTextInput
+  }, [voiceTextInput])
+
+  const handleVoiceParse = async () => {
+    const textToParse = voiceTextRef.current
+
+    // 1. Check for empty input (Critical for Service Failure Detection)
+    if (!textToParse) {
+      setIsProcessing(false)
+      // Custom Alert for troubleshooting
+      if (confirm('未识别到文字。\n\n如果您已说话但无法识别，极可能是因为手机默认语音服务为 Google (需翻墙)。\n\n建议：\n1. 请检查手机设置 -> 语音输入 -> 切换为"华为/讯飞/百度"。\n2. 或者只是单纯没听清，是否重试？')) {
+        // User clicked OK (Retry?), maybe nothing.
+      }
       return
     }
 
     try {
-      const res = parseVoiceInput(text, categories, accounts)
+      const result = await parseVoiceInput(textToParse, categories, accounts)
 
-      if (res.amount) {
-        setAmount(res.amount.toFixed(2))
-        setIsEditingAmount(false)
+      if (!result || (!result.amount && !result.category && !result.remark)) {
+        throw new Error('未识别到有效记账信息')
       }
-      if (res.date) {
-        const now = new Date()
-        const timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
-        setDate(`${res.date}T${timeStr}`)
+
+      if (result.type) setType(result.type)
+      if (result.amount) { setAmount(String(result.amount)); setExpression('') }
+      if (result.category) {
+        const cat = categories.find(c => c.name.includes(result.category))
+        if (cat) setCategoryId(cat.id)
       }
-      if (res.categoryId) setCategoryId(res.categoryId)
-      if (res.accountId) setAccountId(res.accountId)
-      if (res.remark) {
-        setRemark(prev => (prev ? prev + ' ' : '') + res.remark)
-      }
+      if (result.remark) setRemark(result.remark)
+      if (result.date) setDate(new Date(result.date).toISOString().slice(0, 16))
+
+      setShowVoiceTextModal(false)
+      setVoiceTextInput('')
+      voiceTextRef.current = ''
     } catch (e) {
-      console.error('Parse error', e)
+      console.error(e)
+      alert('识别出错: ' + (e.message || '未知错误'))
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  // Listener for "No Popup" mode
+  useEffect(() => {
+    const l = SpeechRecognition.addListener('partialResults', (data) => {
+      if (data.matches && data.matches.length > 0) {
+        setVoiceTextInput(data.matches[0])
+      }
+    })
+    return () => {
+      l.remove()
+      SpeechRecognition.removeAllListeners()
+    }
+  }, [])
+
+  // Voice recognition timeout ref
+  const listeningTimeoutRef = useRef(null)
+  const MAX_LISTENING_DURATION = 5000 // 5 seconds
+
+  const startListening = async () => {
+    // 1. Web Fallback
+    if (!Capacitor.isNativePlatform()) {
+      if (!('webkitSpeechRecognition' in window)) {
+        alert('当前浏览器不支持语音识别 (Chrome Only)')
+        return
+      }
+      const recognition = new window.webkitSpeechRecognition()
+      recognition.lang = 'zh-CN'
+      recognition.continuous = false
+      recognition.interimResults = true
+      recognition.onstart = () => setRecognizing(true)
+      recognition.onend = () => setRecognizing(false)
+      recognition.onresult = (event) => {
+        setVoiceTextInput(event.results[0][0].transcript)
+      }
+      recognition.start()
+      setWebRecognition(recognition)
+      return
     }
 
-    setVoiceTextInput('')
-    setShowVoiceTextModal(false)
+    // 2. Native Plugin (No Popup Mode)
+    try {
+      const { available } = await SpeechRecognition.available()
+      if (!available) {
+        alert('您的设备不支持语音识别')
+        return
+      }
+
+      const status = await SpeechRecognition.requestPermissions()
+      if (status.speechRecognition !== 'granted') {
+        alert('请允许麦克风权限')
+        return
+      }
+
+      setRecognizing(true)
+      setVoiceTextInput('')
+
+      // Set auto-timeout for max listening duration
+      listeningTimeoutRef.current = setTimeout(async () => {
+        setRecognizing(false)
+        setIsProcessing(false)
+        await SpeechRecognition.stop().catch(() => { })
+        alert('识别超时（10秒）。\n\n可能原因：\n1. 未检测到说话\n2. 系统语音服务（如Google）无法连接\n\n建议检查手机设置 -> 语音输入，切换为华为/讯飞/百度。')
+      }, MAX_LISTENING_DURATION)
+
+      await SpeechRecognition.start({
+        language: "zh-CN",
+        maxResults: 1,
+        partialResults: true,
+        popup: false
+      })
+
+    } catch (e) {
+      setRecognizing(false)
+      if (listeningTimeoutRef.current) clearTimeout(listeningTimeoutRef.current)
+      console.error('Speech Error:', e)
+      alert('启动失败: ' + e.message)
+    }
   }
 
-  // 智能记账 - 使用文字输入模式（可配合系统键盘语音输入）
-  const startListening = () => {
-    // 直接打开文字输入模态框
-    // 用户可以打字，或者点击键盘上的麦克风图标使用系统语音输入
-    setShowVoiceTextModal(true)
+  const stopListening = async () => {
+    // Clear timeout when manually stopped
+    if (listeningTimeoutRef.current) {
+      clearTimeout(listeningTimeoutRef.current)
+      listeningTimeoutRef.current = null
+    }
+
+    if (!Capacitor.isNativePlatform()) {
+      if (webRecognition) webRecognition.stop()
+      setRecognizing(false)
+      return
+    }
+    try {
+      await SpeechRecognition.stop()
+      setRecognizing(false)
+    } catch (e) { console.error(e) }
   }
+
+  const handleTouchEnd = async (e) => {
+    e.preventDefault()
+    setRecognizing(false)
+    setIsProcessing(true) // Show processing state immediately
+    await stopListening()
+
+    // Safety timeout: Force stop processing after 5 seconds
+    const processingTimeout = setTimeout(() => {
+      setIsProcessing(false)
+      alert('识别超时。\n\n可能原因：\n1. 未检测到说话\n2. 系统语音服务无法连接\n\n建议检查手机设置中的语音输入服务。')
+    }, 5000)
+
+    // Give it a moment to receive final packets from Native
+    setTimeout(() => {
+      clearTimeout(processingTimeout) // Clear if parse runs
+      handleVoiceParse()
+    }, 1000)
+  }
+
+
+  // ... (rest of code)
+
 
   const loadData = async () => {
     try {
@@ -140,9 +405,11 @@ function AddTransaction() {
       setMerchants(allMerchants || [])
       setProjects(allProjects || [])
 
-      if (typeCats.length > 0 && !categoryId) setCategoryId(typeCats[0].id)
-      if (allAccounts?.length > 0 && !accountId) setAccountId(allAccounts[0].id)
-      if (allPersons?.length > 0 && !personId) setPersonId(allPersons[0].id)
+      if (!editId) {
+        if (typeCats.length > 0 && !categoryId) setCategoryId(typeCats[0].id)
+        if (allAccounts?.length > 0 && !accountId) setAccountId(allAccounts[0].id)
+        if (allPersons?.length > 0 && !personId) setPersonId(allPersons[0].id)
+      }
     } catch (error) {
       console.error('加载失败:', error)
     }
@@ -150,7 +417,7 @@ function AddTransaction() {
 
   const loadEditData = async () => {
     try {
-      const trans = await getTransactionById(editId)
+      const trans = await getTransactionById(Number(editId))
       if (trans) {
         setType(trans.type || 'expense')
         setAmount(String(trans.amount || '0'))
@@ -162,55 +429,21 @@ function AddTransaction() {
         setPersonId(trans.personId)
         setMerchantName(trans.merchant || '')
         setProjectName(trans.project || '')
-        setNoStats(trans.noStats || false)
-        setNoBudget(trans.noBudget || false)
+        setSubCategory(trans.subCategory || '')
         if (trans.type === 'balance') setBalanceType(trans.balanceType || 'increase')
         if (trans.type === 'debt_out' || trans.type === 'debt_in') {
           setType('loan')
           setLoanType(trans.type)
         }
         setIsEditingAmount(false)
-
-        // Load photos
-        const photos = await getPhotosByTransactionId(editId)
+        const photos = await getPhotosByTransactionId(Number(editId))
         setSavedPhotos(photos || [])
       }
-    } catch (error) {
-      console.error('加载编辑数据失败:', error)
-    }
+    } catch (error) { console.error(error) }
   }
 
-  // 从模板加载数据
-  const loadTemplateData = async () => {
-    try {
-      const db = getDB()
-      const template = await db.get('templates', Number(templateId))
-      if (template) {
-        setType(template.type || 'expense')
-        setAmount(String(template.amount || '0.00'))
-        setCategoryId(template.categoryId)
-        setAccountId(template.accountId)
-        setRemark(template.remark || '')
-        setNoStats(template.noStats || false)
-        setNoBudget(template.noBudget || false)
-      }
-    } catch (error) {
-      console.error('加载模板数据失败:', error)
-    }
-  }
-
-  useEffect(() => {
-    loadData()
-  }, [type])
-
-  useEffect(() => {
-    if (editId) loadEditData()
-  }, [editId])
-
-  useEffect(() => {
-    if (templateId) loadTemplateData()
-  }, [templateId])
-
+  useEffect(() => { loadData() }, [type])
+  useEffect(() => { if (editId) loadEditData() }, [editId])
   useEffect(() => {
     if (dateParam && !editId) {
       const now = new Date()
@@ -219,7 +452,7 @@ function AddTransaction() {
     }
   }, [dateParam, editId])
 
-  // 计算表达式结果
+  // Logic: Calculate, KeyPress, Submit (Same as before)
   const calculateResult = (expr) => {
     if (!expr) return 0
     try {
@@ -232,12 +465,9 @@ function AddTransaction() {
         else if (operator === '-') result -= operand
       }
       return result
-    } catch {
-      return 0
-    }
+    } catch { return 0 }
   }
 
-  // 键盘处理
   const handleKeyPress = (key) => {
     if (key === 'OK') {
       const result = calculateResult(expression || amount)
@@ -246,16 +476,11 @@ function AddTransaction() {
       handleSubmit()
       return
     }
-
     if (key === 'DEL') {
       if (expression) {
-        if (expression.length === 1) {
-          setExpression('')
-          setAmount('0.00')
-        } else {
-          const newExpr = expression.slice(0, -1)
-          setExpression(newExpr)
-          setAmount(calculateResult(newExpr).toFixed(2))
+        if (expression.length === 1) { setExpression(''); setAmount('0.00') }
+        else {
+          const newExpr = expression.slice(0, -1); setExpression(newExpr); setAmount(calculateResult(newExpr).toFixed(2))
         }
       } else if (amount.length === 1 || amount === '0.00') {
         setAmount('0.00')
@@ -264,23 +489,14 @@ function AddTransaction() {
       }
       return
     }
-
     if (['+', '-'].includes(key)) {
       const currentExpr = expression || amount
-      if (currentExpr && !/[+\-]$/.test(currentExpr)) {
-        setExpression(currentExpr + key)
-      }
+      if (currentExpr && !/[+\-]$/.test(currentExpr)) setExpression(currentExpr + key)
       return
     }
-
-    // 数字和小数点
     if (expression) {
       if (key === '.') {
-        const parts = expression.split(/[+\-]/)
-        const lastNum = parts[parts.length - 1]
-        if (!lastNum.includes('.')) {
-          setExpression(expression + key)
-        }
+        if (!expression.split(/[+\-]/).pop().includes('.')) setExpression(expression + key)
       } else {
         const newExpr = expression + key
         setExpression(newExpr)
@@ -288,89 +504,74 @@ function AddTransaction() {
       }
     } else {
       if (isEditingAmount) {
-        if (key === '.') {
-          if (!amount.includes('.')) setAmount(amount + '.')
-        } else {
+        if (key === '.') { if (!amount.includes('.')) setAmount(amount + '.') }
+        else {
           if (amount === '0.00' || amount === '0') setAmount(key)
           else setAmount(amount + key)
         }
       } else {
-        setAmount(key)
-        setIsEditingAmount(true)
+        setAmount(key); setIsEditingAmount(true)
       }
     }
   }
 
-  // 提交
-  const handleSubmit = async () => {
+  const handleSubmit = async (isSaveAndNew) => {
+    const keepOpen = (typeof isSaveAndNew === 'boolean') ? isSaveAndNew : false
     const finalAmount = parseFloat(amount)
-    if (!finalAmount || finalAmount === 0) {
-      alert('请输入金额')
-      return
-    }
-
+    if (!finalAmount || finalAmount === 0) { alert('请输入金额'); return }
     try {
       let dbType = type
       if (type === 'loan') dbType = loanType
-
       const data = {
         type: dbType,
         amount: finalAmount,
         balanceType: type === 'balance' ? balanceType : null,
-        categoryId,
-        accountId,
-        toAccountId: type === 'transfer' ? toAccountId : null,
-        remark,
-        date,
-        personId,
-        merchant: merchantName,
-        project: projectName
+        categoryId, accountId, toAccountId: type === 'transfer' ? toAccountId : null,
+        remark, date, personId, merchant: merchantName, project: projectName, subCategory: subCategory
       }
+      const processPhoto = async (transId) => {
+        if (photoFiles.length > 0) {
+          for (const file of photoFiles) {
+            await new Promise(resolve => {
+              const reader = new FileReader()
+              reader.readAsDataURL(file)
+              reader.onload = async () => {
+                await addPhoto({ transactionId: transId, data: reader.result, createdAt: new Date().toISOString() })
+                resolve()
+              }
+            })
+          }
+        }
+      }
+      if (editId) { await updateTransaction(editId, data); await processPhoto(editId) }
+      else { const newTrans = await addTransaction(data); await processPhoto(newTrans.id) }
 
-      if (editId) {
-        await updateTransaction(editId, data)
-        // Update photo if new one added?
-        if (photoFile) {
-          // Read file to base64 or blob
-          const reader = new FileReader()
-          reader.readAsDataURL(photoFile)
-          reader.onload = async () => {
-            await addPhoto({
-              transactionId: editId,
-              data: reader.result,
-              createdAt: new Date().toISOString()
-            })
-          }
-        }
+      if (keepOpen) {
+        setAmount('0.00')
+        setExpression('')
+        setRemark('')
+        setPhotoFiles([])
+        alert('已保存')
       } else {
-        const newTrans = await addTransaction(data)
-        if (photoFile) {
-          const reader = new FileReader()
-          reader.readAsDataURL(photoFile)
-          reader.onload = async () => {
-            await addPhoto({
-              transactionId: newTrans.id,
-              data: reader.result,
-              createdAt: new Date().toISOString()
-            })
-          }
-        }
+        navigate(-1)
       }
-      navigate(-1)
-    } catch (error) {
-      alert('保存失败: ' + error.message)
-    }
+    } catch (e) { alert('保存失败: ' + e.message) }
   }
 
+  // Classic Theme Colors
+  const getThemeColor = () => {
+    if (type === 'income') return '#FFB800'
+    if (type === 'expense') return '#4ECDC4' // Cyan Teal
+    if (type === 'transfer') return '#4A90E2'
+    if (type === 'loan') return '#9B59B6'
+    return '#4ECDC4'
+  }
+
+  // Helpers
   const currentCategory = categories.find(c => c.id === categoryId)
   const currentAccount = accounts.find(a => a.id === accountId)
   const toAccount = accounts.find(a => a.id === toAccountId)
   const currentPerson = persons.find(p => p.id === personId)
-
-  const formatDate = (d) => {
-    const date = new Date(d)
-    return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-  }
 
   const tabs = [
     { key: 'template', label: '模板' },
@@ -381,622 +582,412 @@ function AddTransaction() {
     { key: 'loan', label: '借贷' }
   ]
 
-  const switchTab = (direction) => {
-    const currentIndex = tabs.findIndex(t => t.key === type)
-    if (currentIndex === -1) return
-
-    let nextIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1
-    if (nextIndex < 0 || nextIndex >= tabs.length) return
-
-    const nextKey = tabs[nextIndex].key
-    if (nextKey === 'template') {
-      navigate('/templates')
-    } else {
-      setType(nextKey)
+  const switchTab = (dir) => {
+    const idx = tabs.findIndex(t => t.key === type)
+    let next = dir === 'next' ? idx + 1 : idx - 1
+    if (next >= 0 && next < tabs.length) {
+      if (tabs[next].key === 'template') navigate('/templates')
+      else setType(tabs[next].key)
     }
   }
-
   const handlers = useSwipeable({
     onSwipedLeft: () => switchTab('next'),
     onSwipedRight: () => switchTab('prev'),
     trackMouse: true
   })
 
+  // Group categories for Modal
+  const groupedCategories = useMemo(() => {
+    // Mock grouping or simple
+    return { '默认': categories }
+  }, [categories])
+
+  const renderCategoryIcon = (cat) => (
+    <div style={{ width: 36, height: 36, borderRadius: 10, background: '#F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>
+      {cat.icon || '🏷️'}
+    </div>
+  )
+
   return (
-    <div className="page add-page" {...handlers}>
-      {/* Voice Permission Modal */}
-      {showVoicePermissionModal && (
-        <div className="modal-overlay" style={{ alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-          <div className="modal-content" style={{ maxWidth: 300, borderRadius: 12, padding: 20, paddingBottom: 20 }}>
-            <div className="voice-permission-title">
-              请允许麦克风权限以使用语音记账
-            </div>
-            <div className="voice-permission-actions">
-              <button className="voice-permission-confirm" onClick={() => {
-                setShowVoicePermissionModal(false)
-                startListening()
-              }}>确定</button>
-            </div>
+    <div className="page add-page" {...handlers} style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#F7F8FA' }}>
+
+      {/* 1. Header & Tabs */}
+      <div style={{ background: '#fff', borderBottom: '1px solid #eee' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', paddingTop: 'calc(12px + var(--safe-top))' }}>
+          <button onClick={() => navigate(-1)} style={{ border: 'none', background: 'none', fontSize: 16, color: '#333', display: 'flex', alignItems: 'center' }}>
+            <ChevronLeft size={24} /> {editId ? '编辑' : '记一笔'}
+          </button>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button style={{ background: '#FFF9E6', color: '#FFB800', fontSize: 12, padding: '4px 12px', border: 'none', borderRadius: 12 }}>自定义</button>
+            <button onClick={handleSubmit} style={{ background: '#FFB800', border: 'none', borderRadius: '50%', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Check size={16} color="white" />
+            </button>
           </div>
         </div>
-      )}
 
-      {/* 智能语音记账模态框 */}
-      {showVoiceTextModal && (
-        <div className="modal-overlay" onClick={() => setShowVoiceTextModal(false)} style={{ alignItems: 'flex-end', justifyContent: 'center' }}>
-          <div className="modal-content" onClick={e => e.stopPropagation()} style={{
-            width: '100%',
-            maxWidth: '100%',
-            borderTopLeftRadius: 20,
-            borderTopRightRadius: 20,
-            borderBottomLeftRadius: 0,
-            borderBottomRightRadius: 0,
-            padding: 24,
-            paddingBottom: 40,
-            animation: 'slideUp 0.3s ease-out'
-          }}>
-            <div className="modal-header" style={{ marginBottom: 20 }}>
-              <h3 style={{ fontSize: 18, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 24 }}>🎙️</span> 智能语音记账
-              </h3>
-              <button
-                onClick={() => setShowVoiceTextModal(false)}
-                style={{ background: '#f5f5f5', borderRadius: '50%', width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none' }}
-              >
-                <X size={20} color="#666" />
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div style={{
-                background: '#f9fafb',
-                padding: 16,
-                borderRadius: 12,
-                border: '1px dashed #ddd',
-                fontSize: 14,
-                color: '#666',
-                lineHeight: 1.6
-              }}>
-                <p style={{ margin: 0, marginBottom: 8, fontWeight: 600, color: '#333' }}>💡 使用技巧：</p>
-                <ul style={{ margin: 0, paddingLeft: 20, listStyle: 'disc' }}>
-                  <li>点击下方输入框</li>
-                  <li>点击键盘上的 <strong style={{ color: '#4CAF50' }}>🎤 麦克风图标</strong></li>
-                  <li>说出：<strong>"早餐20元"</strong> 或 <strong>"打车35 微信"</strong></li>
-                </ul>
-              </div>
-
-              <div style={{ position: 'relative' }}>
-                <input
-                  id="voice-input-field"
-                  type="text"
-                  value={voiceTextInput}
-                  onChange={e => setVoiceTextInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleVoiceTextSubmit()}
-                  placeholder="试试说：午餐 30 元..."
-                  autoFocus
-                  style={{
-                    width: '100%',
-                    padding: '16px 16px 16px 50px',
-                    borderRadius: 16,
-                    border: '2px solid #e0e0e0',
-                    fontSize: 18,
-                    outline: 'none',
-                    boxSizing: 'border-box',
-                    transition: 'all 0.2s',
-                    background: '#fff',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
-                  }}
-                  onFocus={(e) => {
-                    e.target.style.borderColor = '#4CAF50';
-                    e.target.style.boxShadow = '0 4px 16px rgba(76, 175, 80, 0.15)';
-                  }}
-                  onBlur={(e) => {
-                    e.target.style.borderColor = '#e0e0e0';
-                    e.target.style.boxShadow = '0 4px 12px rgba(0,0,0,0.05)';
-                  }}
-                />
-                <div style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>
-                  <Mic size={24} color="#4CAF50" />
-                </div>
-              </div>
-
-              <button
-                onClick={() => document.getElementById('voice-input-field').focus()}
-                style={{
-                  width: '100%',
-                  padding: 16,
-                  borderRadius: 16,
-                  background: '#f0f9ff',
-                  color: '#007aff',
-                  border: 'none',
-                  fontSize: 16,
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
-                  marginTop: 8
-                }}
-              >
-                <Mic size={20} />
-                点击启用键盘语音输入
-              </button>
-
-              <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-                <button
-                  onClick={handleVoiceTextSubmit}
-                  style={{
-                    flex: 1,
-                    padding: 16,
-                    borderRadius: 16,
-                    border: 'none',
-                    background: 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)',
-                    color: '#fff',
-                    fontSize: 16,
-                    fontWeight: 700,
-                    boxShadow: '0 8px 16px rgba(76, 175, 80, 0.2)',
-                    cursor: 'pointer'
-                  }}
-                >
-                  确 定
-                </button>
-              </div>
-            </div>
-          </div>
-          <style>{`
-            @keyframes slideUp {
-              from { transform: translateY(100%); opacity: 0; }
-              to { transform: translateY(0); opacity: 1; }
-            }
-          `}</style>
-        </div>
-      )}
-
-      {/* 顶部导航 */}
-      <div className="top-header">
-        <button className="back-btn" onClick={() => navigate(-1)}>
-          <ChevronLeft size={24} />
-          <span>记一笔</span>
-        </button>
-        <div className="header-actions">
-          <button className="custom-btn" onClick={() => navigate('/settings/bookkeeping')}>☆自定义</button>
-          <button className="save-btn" onClick={handleSubmit}>
-            <Check size={20} />
-          </button>
-        </div>
-      </div>
-
-      {/* Tab栏 */}
-      <div className="tab-bar">
-        {tabs.map(tab => (
-          <button
-            key={tab.key}
-            className={`tab-item ${type === tab.key ? 'active' : ''}`}
-            onClick={() => {
-              if (tab.key === 'template') {
-                navigate('/templates')
-              } else {
-                setType(tab.key)
-              }
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="amount-section" onClick={() => setShowKeyboard(true)}>
-        <div className="amount-display">
-          <span className="amount-value">{amount}</span>
-          {expression && <span className="expression">{expression}</span>}
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-
-          {/* Photos Thumbnails */}
-          {savedPhotos.map(photo => (
-            <div key={photo.id} className="thumb-box">
-              <img src={photo.data} onClick={() => setPreviewImage(photo.data)} />
-              <button className="thumb-del" onClick={async (e) => {
-                e.stopPropagation()
-                if (confirm('删除此照片?')) {
-                  await deletePhoto(photo.id)
-                  setSavedPhotos(prev => prev.filter(p => p.id !== photo.id))
-                }
-              }}><X size={10} /></button>
-            </div>
+        <div style={{ display: 'flex', overflowX: 'auto', gap: 24, padding: '0 20px', scrollbarWidth: 'none' }}>
+          {tabs.map(tab => (
+            <button key={tab.key} onClick={() => tab.key === 'template' ? navigate('/templates') : setType(tab.key)}
+              style={{
+                border: 'none', background: 'none', padding: '10px 0', fontSize: 15,
+                color: type === tab.key ? '#333' : '#999', fontWeight: type === tab.key ? '600' : '400',
+                position: 'relative'
+              }}
+            >
+              {tab.label}
+              {type === tab.key && <div style={{ position: 'absolute', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: 20, height: 3, background: '#FFB800', borderRadius: 2 }}></div>}
+            </button>
           ))}
-          {newPhotoUrl && (
-            <div className="thumb-box new">
-              <img src={newPhotoUrl} onClick={() => setPreviewImage(newPhotoUrl)} />
-              <button className="thumb-del" onClick={(e) => {
-                e.stopPropagation()
-                setPhotoFile(null)
-              }}><X size={10} /></button>
+        </div>
+      </div>
+
+      {/* 2. Amount Display */}
+      <div onClick={() => setShowKeyboard(true)} style={{ background: '#fff', padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${getThemeColor()}`, cursor: 'pointer' }}>
+        <div style={{ fontSize: 48, fontWeight: 500, fontFamily: 'DIN Alternate', color: getThemeColor(), flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', marginRight: 10 }}>
+          {expression || amount}
+        </div>
+        <div style={{ display: 'flex', gap: 16 }}>
+          {/* Photos Badge */}
+          {(allPhotos.length > 0) && (
+            <div onClick={(e) => {
+              e.stopPropagation();
+              setPreviewIndex(allPhotos.length - 1);
+            }} style={{ position: 'relative', width: 40, height: 40, borderRadius: 8, overflow: 'hidden', border: '1px solid #eee' }}>
+              <img src={allPhotos[allPhotos.length - 1].url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              {allPhotos.length > 1 && (
+                <div style={{ position: 'absolute', top: 0, right: 0, background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 10, padding: '0 4px', borderBottomLeftRadius: 4 }}>
+                  {allPhotos.length}
+                </div>
+              )}
             </div>
           )}
 
-          <button className="camera-btn" onClick={() => document.getElementById('camera-input').click()} disabled={recognizing}>
-            {recognizing ? <Loader2 size={22} className="spin" /> : <Camera size={22} />}
-            <span>{recognizing ? '识别中' : '拍照'}</span>
-          </button>
+          {/* Camera (Now First) */}
+          <div onClick={(e) => { e.stopPropagation(); handleCameraClick() }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, color: '#666', fontSize: 10, position: 'relative' }}>
+            <div style={{ width: 40, height: 40, background: '#f5f5f5', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {isOCR ? (
+                <div style={{ position: 'relative', width: 24, height: 24 }}>
+                  <svg viewBox="0 0 36 36" style={{ transform: 'rotate(-90deg)', width: '100%', height: '100%' }}>
+                    <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#eee" strokeWidth="4" />
+                    <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#00bfa5" strokeWidth="4" strokeDasharray={`${ocrProgress}, 100`} />
+                  </svg>
+                </div>
+              ) : <CameraIcon size={20} />}
+            </div>
 
-          <button className={`camera-btn ${listening ? 'listening' : ''}`} onClick={startListening} disabled={recognizing || listening}>
-            {listening ? <Loader2 size={22} className="spin" /> : <Mic size={22} />}
-            <span>{listening ? '听写中' : '语音'}</span>
-          </button>
+            {isOCR ? `${ocrProgress}%` : '拍照'}
+            <input type="file" ref={fileInputRef} onChange={handlePhotoChange} style={{ display: 'none' }} accept="image/*" multiple />
+          </div>
+
+          {/* Voice (Now Second) */}
+          <div onClick={(e) => { e.stopPropagation(); setShowVoiceTextModal(true) }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, color: '#666', fontSize: 10 }}>
+            <div style={{ width: 40, height: 40, background: '#f5f5f5', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Mic size={20} />
+            </div>
+            语音
+          </div>
         </div>
       </div>
-      <input
-        type="file"
-        id="camera-input"
-        accept="image/*"
-        capture="environment"
-        style={{ display: 'none' }}
-        onChange={async (e) => {
-          const file = e.target.files[0]
-          if (!file) return
 
-          setPhotoFile(file)
-          setRecognizing(true)
-          setOcrProgress(0)
+      {/* 3. Linear Form (The Key "This Style") */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 0', display: 'flex', flexDirection: 'column', gap: 0 }}>
 
-          if (ocrTimeoutRef.current) clearTimeout(ocrTimeoutRef.current)
-          ocrTimeoutRef.current = setTimeout(() => {
-            setRecognizing(false)
-            alert('识别超时，请重试或手动输入')
-          }, 15000)
-
-          try {
-            const res = await recognizeReceipt(file, (progress) => {
-              setOcrProgress(Math.floor(progress * 100))
-            })
-            if (res.amount) {
-              setAmount(res.amount.toFixed(2))
-              setIsEditingAmount(false)
-            }
-            if (res.date) {
-              const now = new Date()
-              const timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
-              setDate(`${res.date}T${timeStr}`)
-            }
-            if (res.merchant) {
-              setMerchantName(res.merchant)
-            }
-            setRemark(prev => (prev ? prev + ' ' : '') + 'OCR识别')
-            // Don't alert, just show success via UI or toast
-            // alert(`识别成功！\n金额: ${res.amount}\n日期: ${res.date || '未识别'}\n商家: ${res.merchant || '未识别'}`)
-          } catch (err) {
-            alert('识别失败: ' + err.message)
-            setPhotoFile(null)
-          } finally {
-            if (ocrTimeoutRef.current) clearTimeout(ocrTimeoutRef.current)
-            setRecognizing(false)
-            setOcrProgress(0)
-            e.target.value = '' // Reset
-          }
-        }}
-      />
-
-      {/* OCR Progress Bar */}
-      {recognizing && (
-        <div className="ocr-progress-overlay">
-          <div className="ocr-progress-box">
-            <span>正在识别... {ocrProgress}%</span>
-            <div className="ocr-bar">
-              <div className="ocr-fill" style={{ width: `${ocrProgress}%` }}></div>
-            </div>
-            <button
-              className="ocr-cancel-btn"
-              onClick={() => {
-                setRecognizing(false)
-                if (ocrTimeoutRef.current) clearTimeout(ocrTimeoutRef.current)
-                setOcrProgress(0)
-              }}
-            >
-              取消
-            </button>
-          </div>
-        </div>
-      )}
-
-
-
-      {/* Full Screen Image Preview */}
-      {previewImage && (
-        <div className="preview-overlay" onClick={() => setPreviewImage(null)}>
-          <img src={previewImage} className="preview-img" alt="Original" onClick={e => e.stopPropagation()} />
-          <button className="preview-close" onClick={() => setPreviewImage(null)}>
-            <X size={24} />
-          </button>
-        </div>
-      )}
-
-
-
-      {/* 表单区 */}
-      <div className="form-section">
-        {/* 借贷类型 */}
-        {type === 'loan' ? (
+        {/* Category Row */}
+        {type !== 'transfer' && type !== 'loan' && (
           <>
-            <div className="form-row">
-              <div className="row-icon"><ArrowRightLeft size={18} color="#999" /></div>
-              <span className="row-label">类型</span>
-              <div className="row-value loan-type-toggle">
-                <button
-                  className={loanType === 'debt_out' ? 'active' : ''}
-                  onClick={() => setLoanType('debt_out')}
-                >借出</button>
-                <button
-                  className={loanType === 'debt_in' ? 'active' : ''}
-                  onClick={() => setLoanType('debt_in')}
-                >借入</button>
-              </div>
-            </div>
-
-            <div className="form-row" onClick={() => setShowPersonModal(true)}>
-              <div className="row-icon"><Users size={18} color="#999" /></div>
-              <span className="row-label">成员</span>
-              <div className="row-value">
-                {currentPerson?.name || '请选择成员(必选)'}
-                <ChevronRight size={16} color="#ccc" />
-              </div>
-            </div>
-
-            <div className="form-row" onClick={() => setShowAccountModal(true)}>
-              <div className="row-icon"><CreditCard size={18} color="#999" /></div>
-              <span className="row-label">账户</span>
-              <div className="row-value">
-                {currentAccount?.name || '请选择'}
-                <ChevronDown size={16} color="#ccc" />
-              </div>
-            </div>
-          </>
-        ) : type === 'balance' ? (
-          <>
-            {/* 余额类型 */}
-            <div className="form-row">
-              <div className="row-icon"><ArrowRightLeft size={18} color="#999" /></div>
-              <span className="row-label">调整</span>
-              <div className="row-value loan-type-toggle">
-                <button
-                  className={balanceType === 'increase' ? 'active' : ''}
-                  onClick={() => setBalanceType('increase')}
-                >增加</button>
-                <button
-                  className={balanceType === 'decrease' ? 'active' : ''}
-                  onClick={() => setBalanceType('decrease')}
-                >减少</button>
-              </div>
-            </div>
-
-            {/* 余额调整只需要账户 */}
-            <div className="form-row" onClick={() => setShowAccountModal(true)}>
-              <div className="row-icon"><CreditCard size={18} color="#999" /></div>
-              <span className="row-label">账户</span>
-              <div className="row-value">
-                {currentAccount?.name || '请选择'}
-                <ChevronDown size={16} color="#ccc" />
-              </div>
-            </div>
-          </>
-        ) : type === 'transfer' ? (
-          <div className="form-row transfer-accounts">
-            <div className="row-icon"><CreditCard size={18} color="#999" /></div>
-            <span className="row-label">账户</span>
-            <div className="transfer-pair">
-              <div className="transfer-item" onClick={() => setShowAccountModal(true)}>
-                <span className="transfer-type">转出</span>
-                <span className="transfer-account">{currentAccount?.name || '请选择'}(CNY)</span>
-              </div>
-              <span className="transfer-arrow">⇄</span>
-              <div className="transfer-item" onClick={() => setShowToAccountModal(true)}>
-                <span className="transfer-type">转入</span>
-                <span className="transfer-account">{toAccount?.name || '请选择'}(CNY)</span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <>
-            {/* 分类 */}
             <div className="form-row" onClick={() => setShowCategoryModal(true)}>
               <div className="row-icon"><Grid size={18} color="#999" /></div>
-              <span className="row-label">分类</span>
-              <div className="row-value">
+              <div className="row-label">分类</div>
+              <div className="row-value" style={{ justifyContent: 'flex-start', alignItems: 'center', gap: 8 }}>
                 {currentCategory ? (
                   <>
-                    <span>{currentCategory.name}</span>
-                    <ChevronRight size={16} color="#ccc" />
+                    <span style={{ fontSize: 14 }}>{currentCategory.name}</span>
+                    <div onClick={(e) => {
+                      e.stopPropagation();
+                      setShowSubCatModal(true);
+                    }} style={{ background: '#F3F4F6', borderRadius: 12, padding: '2px 8px', fontSize: 11, color: '#666', border: '1px dashed #ccc' }}>
+                      {subCategory || '+子分类'}
+                    </div>
                   </>
-                ) : '请选择'}
+                ) : <span style={{ color: '#ccc' }}>选择分类</span>}
               </div>
+              <ChevronRight size={16} color="#ccc" />
             </div>
 
-            {/* 账户 */}
-            <div className="form-row" onClick={() => setShowAccountModal(true)}>
-              <div className="row-icon"><CreditCard size={18} color="#999" /></div>
-              <span className="row-label">账户</span>
-              <div className="row-value">
-                {currentAccount?.name || '请选择'}(CNY)
-                <ChevronDown size={16} color="#ccc" />
-              </div>
-            </div>
+
           </>
         )}
 
-        {/* 备注 */}
+        {/* Account Row */}
+        <div className="form-row" onClick={() => setShowAccountModal(true)}>
+          <div className="row-icon"><CreditCard size={18} color="#999" /></div>
+          <div className="row-label">账户</div>
+          <div className="row-value" style={{ justifyContent: 'flex-start' }}>
+            {currentAccount?.name || '选择账户'}
+          </div>
+        </div>
+
+        {/* Remark Row */}
         <div className="form-row">
-          <div className="row-icon"><FileText size={18} color="#999" /></div>
-          <span className="row-label">备注</span>
-          <input
-            type="text"
-            className="row-input"
-            placeholder="..."
-            value={remark}
-            onChange={e => setRemark(e.target.value)}
+          <div className="row-icon"><Bookmark size={18} color="#999" /></div>
+          <div className="row-label">备注</div>
+          <input type="text" value={remark} onChange={e => setRemark(e.target.value)} placeholder="..."
+            style={{ border: 'none', background: 'none', fontSize: 14, flex: 1, outline: 'none' }}
           />
         </div>
 
-      </div>
-
-      {/* 固定底部选项 */}
-      <div className="quick-tags" style={{ padding: '0 16px 16px 16px' }}>
-        <button className="tag-btn" onClick={() => document.getElementById('date-picker').showPicker()}>
-          {formatDate(date)}
-        </button>
-        <input
-          type="datetime-local"
-          id="date-picker"
-          value={date}
-          onChange={e => setDate(e.target.value)}
-          style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
-        />
-        <button className="tag-btn" onClick={() => setShowPersonModal(true)}>
-          {currentPerson?.name || '成员'}
-        </button>
-        <button className="tag-btn" onClick={() => setShowMerchantModal(true)}>
-          {merchantName || '商家'}
-        </button>
-        <button className="tag-btn" onClick={() => setShowProjectModal(true)}>
-          {projectName || '项目'}
-        </button>
-        <div style={{ flex: 1 }}></div>
-        <button className="tag-btn" onClick={() => setShowKeyboard(!showKeyboard)} style={{ background: 'none', border: 'none', padding: '4px', color: '#999' }}>
-          {showKeyboard ? <ChevronDown size={20} /> : <ChevronDown size={20} style={{ transform: 'rotate(180deg)' }} />}
-        </button>
-      </div>
-
-
-
-      {/* 键盘区域 - 可折叠 */}
-      {showKeyboard ? (
-        <div className="keyboard-section">
-          {/* 左侧类型切换 */}
-          <div className="type-sidebar">
-            <button className={`type-btn ${type === 'expense' ? 'active' : ''}`} onClick={() => setType('expense')}>
-              支出
-            </button>
-            <button className={`type-btn ${type === 'income' ? 'active' : ''}`} onClick={() => setType('income')}>
-              收入
-            </button>
-            <button className={`type-btn ${type === 'transfer' ? 'active' : ''}`} onClick={() => setType('transfer')}>
-              转账
-            </button>
+        {/* Chips Row (Date, Member, etc) */}
+        <div style={{ padding: '20px 16px', display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          {/* Date Chip */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div onClick={() => adjustDate(-1)} style={{ padding: 4 }}><ChevronLeft size={16} color="#666" /></div>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', background: '#F3F4F6', borderRadius: 16, padding: '6px 12px', fontSize: 12, color: '#333' }}>
+              <span style={{ pointerEvents: 'none' }}>{formatDateCN(date)}</span>
+              <input type="datetime-local" value={date} onChange={e => setDate(e.target.value)}
+                style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%' }}
+              />
+            </div>
+            <div onClick={() => adjustDate(1)} style={{ padding: 4 }}><ChevronRight size={16} color="#666" /></div>
           </div>
 
-          {/* 数字键盘 */}
-          <div className="number-pad">
-            {['7', '8', '9', '4', '5', '6', '1', '2', '3', '.', '0'].map(key => (
-              <button key={key} className="num-btn" onClick={() => handleKeyPress(key)}>
-                {key}
+          {/* Member Chip */}
+          <div style={{ background: '#F3F4F6', borderRadius: 16, padding: '6px 12px', fontSize: 12, color: '#333' }} onClick={() => setShowPersonModal(true)}>
+            {currentPerson?.name || '成员'}
+          </div>
+
+          {/* Merchant Chip */}
+          <div style={{ background: '#F3F4F6', borderRadius: 16, padding: '6px 12px', fontSize: 12, color: '#333' }} onClick={() => {
+            const name = prompt('商家名称', merchantName); if (name !== null) setMerchantName(name);
+          }}>
+            {merchantName || '商家'}
+          </div>
+
+          {/* Project Chip */}
+          <div style={{ background: '#F3F4F6', borderRadius: 16, padding: '6px 12px', fontSize: 12, color: '#333' }} onClick={() => {
+            const name = prompt('项目名称', projectName); if (name !== null) setProjectName(name);
+          }}>
+            {projectName || '项目'}
+          </div>
+        </div>
+
+      </div>
+
+      {/* 4. Keyboard (3 Columns: Sidebar | Numpad | Actions) */}
+      {
+        showKeyboard && (
+          <div className="keyboard-section">
+            {/* Left Sidebar (Type Switcher from Image? Or Shortcuts?) */}
+            {/* Image shows "支出", "收入", "转账" on left. */}
+            <div className="type-sidebar">
+              <button className={`type-btn ${type === 'expense' ? 'active' : ''}`} onClick={() => setType('expense')}>支出</button>
+              <button className={`type-btn ${type === 'income' ? 'active' : ''}`} onClick={() => setType('income')}>收入</button>
+              <button className={`type-btn ${type === 'transfer' ? 'active' : ''}`} onClick={() => setType('transfer')}>转账</button>
+              {/* If Loan is needed, add scroll or squeeze */}
+            </div>
+
+            {/* Center Numpad */}
+            <div className="number-pad">
+              {[7, 8, 9, 4, 5, 6, 1, 2, 3, '.', 0].map(k => (
+                <button key={k} className="num-btn" onClick={() => handleKeyPress(String(k))}>{k}</button>
+              ))}
+              <button className="num-btn" onClick={() => handleKeyPress('DEL')}><Delete size={22} /></button>
+            </div>
+
+            {/* Right Actions */}
+            <div className="action-sidebar" style={{ position: 'relative' }}>
+              <button onClick={() => setShowKeyboard(false)} style={{
+                position: 'absolute', top: -32, right: 0, width: '100%', height: 32,
+                background: '#fff', border: 'none', borderTopLeftRadius: 8,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 -2px 5px rgba(0,0,0,0.05)', zIndex: 10
+              }}>
+                <ChevronDown size={20} color="#666" />
               </button>
-            ))}
-            <button className="num-btn" onClick={() => handleKeyPress('DEL')}>
-              <Delete size={20} />
-            </button>
+              <button className="action-btn" onClick={() => handleKeyPress('-')}>-</button>
+              <button className="action-btn" onClick={() => handleKeyPress('+')}>+</button>
+              <button className="action-btn ok" onClick={handleSubmit}>确定</button>
+            </div>
           </div>
+        )
+      }
 
-          {/* 右侧操作区 */}
-          <div className="action-sidebar">
-            <button className="action-btn" onClick={() => handleKeyPress('-')}>−</button>
-            <button className="action-btn" onClick={() => handleKeyPress('+')}>+</button>
-            <button className="action-btn ok" onClick={() => handleKeyPress('OK')}>
-              确<br />定
-            </button>
+      {/* Bottom Actions (Shown when keyboard is hidden) */}
+      {
+        !showKeyboard && (
+          <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '16px 20px', paddingBottom: 'calc(16px + env(safe-area-inset-bottom))', background: '#fff', borderTop: '1px solid #f5f5f5', display: 'flex', gap: 16, zIndex: 100 }}>
+            <button onClick={() => handleSubmit(true)} style={{ flex: 1, height: 44, borderRadius: 22, border: '1px solid #FFB800', background: '#FFF9E6', color: '#FFB800', fontSize: 16 }}>再记一笔</button>
+            <button onClick={() => handleSubmit(false)} style={{ flex: 1, height: 44, borderRadius: 22, background: '#FFB800', color: '#fff', border: 'none', fontSize: 16 }}>完成</button>
           </div>
-        </div>
-      ) : (
-        /* 键盘收起时显示底部操作栏 */
-        <div className="bottom-actions">
-          <button className="bottom-btn outline" onClick={() => { handleKeyPress('OK'); setShowKeyboard(true) }}>
-            再记一笔
-          </button>
-          <button className="bottom-btn primary" onClick={() => { handleKeyPress('OK'); navigate(-1) }}>
-            完成
-          </button>
-        </div>
-      )}
+        )
+      }
 
-      {/* 分类选择Modal - 平铺模式 */}
+      {/* Category Modal (Simple grid overlay) */}
       {
         showCategoryModal && (
           <div className="modal-overlay" onClick={() => setShowCategoryModal(false)}>
             <div className="category-modal-content" onClick={e => e.stopPropagation()}>
-              {/* 顶部操作栏 */}
-              <div className="category-toolbar">
-                <button className="toolbar-btn">⊕</button>
-                <button className="toolbar-btn">⧉</button>
-                <button className="toolbar-btn">⌕</button>
-                <button className="toolbar-close" onClick={() => setShowCategoryModal(false)}>
-                  <ChevronDown size={20} />
-                </button>
-              </div>
-
-              {/* 分类组列表 */}
+              <div className="modal-header"><h3>选择分类</h3><X size={20} onClick={() => setShowCategoryModal(false)} /></div>
               <div className="category-groups">
-                {categoryGroups.map(group => {
-                  const groupCats = categories.filter(c => c.group === group.key || (!c.group && group.key === 'other'))
-                  if (groupCats.length === 0) return null
-
-                  return (
-                    <div key={group.key} className="category-group">
-                      <h4 className="group-title">{group.name}</h4>
-                      <div className="group-items">
-                        {groupCats.map(cat => (
-                          <div
-                            key={cat.id}
-                            className={`cat-item ${categoryId === cat.id ? 'selected' : ''}`}
-                            onClick={() => { setCategoryId(cat.id); setShowCategoryModal(false) }}
-                          >
-                            <div className="cat-icon" style={{ backgroundColor: cat.color }}>{cat.icon}</div>
-                            <span>{cat.name}</span>
-                          </div>
-                        ))}
-                      </div>
+                <div className="group-items">
+                  {categories.map(cat => (
+                    <div key={cat.id} className={`cat-item ${categoryId === cat.id ? 'selected' : ''}`} onClick={() => { setCategoryId(cat.id); setShowCategoryModal(false); }}>
+                      <div className="cat-icon">{cat.icon}</div>
+                      <span>{cat.name}</span>
                     </div>
-                  )
-                })}
-
-                {/* 如果没有分组，直接显示所有分类 */}
-                {categories.filter(c => !c.group).length === categories.length && (
-                  <div className="category-group">
-                    <div className="group-items">
-                      {categories.map(cat => (
-                        <div
-                          key={cat.id}
-                          className={`cat-item ${categoryId === cat.id ? 'selected' : ''}`}
-                          onClick={() => { setCategoryId(cat.id); setShowCategoryModal(false) }}
-                        >
-                          <div className="cat-icon" style={{ backgroundColor: cat.color }}>{cat.icon}</div>
-                          <span>{cat.name}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                  ))}
+                </div>
               </div>
             </div>
           </div>
         )
       }
 
-      {/* 账户选择Modal */}
+
+      {/* SubCategory Modal */}
+      {showSubCatModal && (
+        <div className="modal-overlay" onClick={() => setShowSubCatModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-header"><h3>选择子分类</h3><X size={20} onClick={() => setShowSubCatModal(false)} /></div>
+            <div style={{ padding: 16 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {['早餐', '午餐', '晚餐', '零食', '饮料', '水果', '买菜', '打车', '地铁', '公交', '日用品', '服饰'].map(s => (
+                  <div key={s} onClick={() => { setSubCategory(s); setShowSubCatModal(false); }}
+                    style={{ background: subCategory === s ? '#FFF3E0' : '#F3F4F6', color: subCategory === s ? '#FFB800' : '#333', padding: '8px 16px', borderRadius: 16, fontSize: 13 }}>
+                    {s}
+                  </div>
+                ))}
+                <div onClick={() => {
+                  const s = prompt('自定义子分类');
+                  if (s) { setSubCategory(s); setShowSubCatModal(false); }
+                }} style={{ background: '#fff', border: '1px dashed #ccc', color: '#666', padding: '8px 16px', borderRadius: 16, fontSize: 13 }}>
+                  + 自定义
+                </div>
+              </div>
+              {subCategory && (
+                <div onClick={() => { setSubCategory(''); setShowSubCatModal(false); }} style={{ marginTop: 20, textAlign: 'center', color: '#ff4d4f', fontSize: 14 }}>
+                  清除当前子分类
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Voice Modal - Simplified Keyboard Input Mode */}
+      {
+        showVoiceTextModal && (
+          <div className="modal-overlay" onClick={() => setShowVoiceTextModal(false)}>
+            <div className="modal-content" onClick={e => e.stopPropagation()} style={{ padding: 24 }}>
+              <h3>语音/文本记账</h3>
+
+              {/* Instructions */}
+              <div style={{
+                background: '#f0f7ff',
+                border: '1px solid #91caff',
+                borderRadius: 8,
+                padding: 12,
+                marginBottom: 16,
+                fontSize: 13,
+                color: '#0958d9'
+              }}>
+                <Keyboard size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
+                <strong>使用方法：</strong>点击输入框 → 用键盘 🎤 语音按钮说话 → 自动识别
+              </div>
+
+              {/* Text Input - Auto-parse on blur */}
+              <textarea
+                id="voice-textarea"
+                value={voiceTextInput}
+                onChange={e => setVoiceTextInput(e.target.value)}
+                onBlur={() => {
+                  // Auto-parse when keyboard closes (user taps away)
+                  if (voiceTextInput.trim()) {
+                    setIsProcessing(true)
+                    setTimeout(async () => {
+                      await handleVoiceParse()
+                    }, 100)
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  height: 100,
+                  padding: 12,
+                  background: '#fafafa',
+                  border: '1px solid #d9d9d9',
+                  borderRadius: 8,
+                  marginBottom: 16,
+                  fontSize: 16,
+                  resize: 'none'
+                }}
+                placeholder="点击这里，用键盘语音输入...
+例如：午餐 35元 微信"
+              />
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                <button
+                  onClick={() => setShowVoiceTextModal(false)}
+                  style={{
+                    flex: 1,
+                    padding: '12px 0',
+                    background: '#f5f5f5',
+                    border: 'none',
+                    borderRadius: 8,
+                    fontSize: 15,
+                    cursor: 'pointer'
+                  }}>
+                  取消
+                </button>
+                <button
+                  onClick={() => {
+                    if (!voiceTextInput.trim()) {
+                      alert('请先输入或语音输入内容')
+                      return
+                    }
+                    setIsProcessing(true)
+                    // Use setTimeout to avoid blocking UI
+                    setTimeout(async () => {
+                      await handleVoiceParse()
+                    }, 100)
+                  }}
+                  disabled={isProcessing}
+                  style={{
+                    flex: 2,
+                    padding: '12px 0',
+                    background: isProcessing ? '#faad14' : '#1677ff',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 8,
+                    fontSize: 15,
+                    fontWeight: 500,
+                    cursor: isProcessing ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6
+                  }}>
+                  {isProcessing ? (
+                    <><Loader2 className="spin" size={18} /> 识别中...</>
+                  ) : (
+                    <><Check size={18} /> 智能识别</>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* Account Modal */}
       {
         showAccountModal && (
           <div className="modal-overlay" onClick={() => setShowAccountModal(false)}>
             <div className="modal-content" onClick={e => e.stopPropagation()}>
-              <div className="modal-header">
-                <h3>选择账户</h3>
-                <button onClick={() => setShowAccountModal(false)}><X size={20} /></button>
-              </div>
+              <div className="modal-header"><h3>选择账户</h3></div>
               <div className="list-items">
-                {accounts.map(acc => (
-                  <div
-                    key={acc.id}
-                    className="list-item"
-                    onClick={() => { setAccountId(acc.id); setShowAccountModal(false) }}
-                  >
-                    <span>{acc.icon || '💳'}</span>
-                    <span>{acc.name}</span>
+                {accounts.map(a => (
+                  <div key={a.id} className="list-item" onClick={() => { setAccountId(a.id); setShowAccountModal(false) }}>
+                    <span>{a.icon}</span> <span>{a.name}</span> {accountId === a.id && <Check size={16} color="#00bfa5" />}
                   </div>
                 ))}
               </div>
@@ -1005,50 +996,16 @@ function AddTransaction() {
         )
       }
 
-      {/* 转入账户选择Modal */}
-      {
-        showToAccountModal && (
-          <div className="modal-overlay" onClick={() => setShowToAccountModal(false)}>
-            <div className="modal-content" onClick={e => e.stopPropagation()}>
-              <div className="modal-header">
-                <h3>选择转入账户</h3>
-                <button onClick={() => setShowToAccountModal(false)}><X size={20} /></button>
-              </div>
-              <div className="list-items">
-                {accounts.filter(a => a.id !== accountId).map(acc => (
-                  <div
-                    key={acc.id}
-                    className="list-item"
-                    onClick={() => { setToAccountId(acc.id); setShowToAccountModal(false) }}
-                  >
-                    <span>{acc.icon || '💳'}</span>
-                    <span>{acc.name}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )
-      }
-
-      {/* 成员选择Modal */}
+      {/* Person Modal */}
       {
         showPersonModal && (
           <div className="modal-overlay" onClick={() => setShowPersonModal(false)}>
             <div className="modal-content" onClick={e => e.stopPropagation()}>
-              <div className="modal-header">
-                <h3>选择成员</h3>
-                <button onClick={() => setShowPersonModal(false)}><X size={20} /></button>
-              </div>
+              <div className="modal-header"><h3>选择成员</h3></div>
               <div className="list-items">
                 {persons.map(p => (
-                  <div
-                    key={p.id}
-                    className="list-item"
-                    onClick={() => { setPersonId(p.id); setShowPersonModal(false) }}
-                  >
-                    <span>{p.avatar || '👤'}</span>
-                    <span>{p.name}</span>
+                  <div key={p.id} className="list-item" onClick={() => { setPersonId(p.id); setShowPersonModal(false) }}>
+                    <span>{p.name}</span> {personId === p.id && <Check size={16} color="#00bfa5" />}
                   </div>
                 ))}
               </div>
@@ -1057,59 +1014,81 @@ function AddTransaction() {
         )
       }
 
-      {/* 商家选择Modal */}
+      {/* Image Preview Modal */}
+      {/* Image Preview Modal */}
       {
-        showMerchantModal && (
-          <div className="modal-overlay" onClick={() => setShowMerchantModal(false)}>
-            <div className="modal-content" onClick={e => e.stopPropagation()}>
-              <div className="modal-header">
-                <h3>选择商家</h3>
-                <button onClick={() => setShowMerchantModal(false)}><X size={20} /></button>
+        previewIndex >= 0 && allPhotos[previewIndex] && (
+          <div className="modal-overlay" onClick={() => setPreviewIndex(-1)} style={{ background: 'rgba(0,0,0,0.95)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}>
+            <div onClick={e => e.stopPropagation()} style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+
+              {/* Image */}
+              <img src={allPhotos[previewIndex].url} style={{ width: '100%', height: '80%', objectFit: 'contain' }} />
+
+              {/* Controls */}
+              <div style={{ position: 'absolute', top: 40, right: 20, zIndex: 10 }}>
+                <button onClick={() => setPreviewIndex(-1)} style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: 'none', borderRadius: 20, padding: '8px 16px', backdropFilter: 'blur(5px)' }}>关闭</button>
               </div>
-              <div className="list-items">
-                {merchants.map(m => (
-                  <div
-                    key={m.id}
-                    className="list-item"
-                    onClick={() => { setMerchantName(m.name); setShowMerchantModal(false) }}
-                  >
-                    <span>{m.icon || '🏪'}</span>
-                    <span>{m.name}</span>
-                  </div>
-                ))}
+
+              {/* Navigation & Delete */}
+              <div style={{ position: 'absolute', bottom: 40, left: 0, right: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 40px' }}>
+                {previewIndex > 0 ? (
+                  <button onClick={() => setPreviewIndex(prev => prev - 1)} style={{ background: 'none', border: 'none', color: '#fff' }}><ChevronLeft size={32} /></button>
+                ) : <div style={{ width: 32 }} />}
+
+                <button onClick={async () => {
+                  if (!confirm('确定删除这张图片吗？')) return;
+                  const target = allPhotos[previewIndex];
+                  if (target.isNew) {
+                    // Delete from photoFiles
+                    setPhotoFiles(prev => prev.filter(f => f !== target.file))
+                  } else {
+                    // Delete from savedPhotos
+                    try {
+                      await deletePhoto(target.id)
+                      setSavedPhotos(prev => prev.filter(p => p.id !== target.id))
+                    } catch (e) { alert('删除失败') }
+                  }
+                  if (allPhotos.length <= 1) setPreviewIndex(-1)
+                  else if (previewIndex >= allPhotos.length - 1) setPreviewIndex(previewIndex - 1)
+                }} style={{ width: 50, height: 50, borderRadius: 25, background: '#ff4d4f', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(255, 77, 79, 0.4)' }}>
+                  <Delete size={24} color="#fff" />
+                </button>
+
+                {previewIndex < allPhotos.length - 1 ? (
+                  <button onClick={() => setPreviewIndex(prev => prev + 1)} style={{ background: 'none', border: 'none', color: '#fff' }}><ChevronRight size={32} /></button>
+                ) : <div style={{ width: 32 }} />}
               </div>
+
+              {/* Counter */}
+              <div style={{ position: 'absolute', top: 40, left: 20, color: '#fff', fontSize: 16, fontWeight: 500 }}>
+                {previewIndex + 1} / {allPhotos.length}
+              </div>
+
             </div>
           </div>
         )
       }
 
-      {/* 项目选择Modal */}
+      {/* Source Selection Modal */}
       {
-        showProjectModal && (
-          <div className="modal-overlay" onClick={() => setShowProjectModal(false)}>
-            <div className="modal-content" onClick={e => e.stopPropagation()}>
-              <div className="modal-header">
-                <h3>选择项目</h3>
-                <button onClick={() => setShowProjectModal(false)}><X size={20} /></button>
+        showSourceModal && (
+          <div className="modal-overlay" onClick={() => setShowSourceModal(false)} style={{ alignItems: 'flex-end', justifyContent: 'center' }}>
+            <div onClick={e => e.stopPropagation()} style={{ width: '90%', marginBottom: 30, display: 'flex', flexDirection: 'column', gap: 10, zIndex: 3001 }}>
+              <div style={{ background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(10px)', borderRadius: 14, overflow: 'hidden' }}>
+                <button onClick={handleTakePhoto} style={{ width: '100%', padding: '16px', background: 'transparent', border: 'none', borderBottom: '1px solid rgba(0,0,0,0.1)', fontSize: 18, color: '#007AFF', cursor: 'pointer' }}>
+                  拍照
+                </button>
+                <button onClick={handlePickFromGallery} style={{ width: '100%', padding: '16px', background: 'transparent', border: 'none', fontSize: 18, color: '#007AFF', cursor: 'pointer' }}>
+                  从相册选择
+                </button>
               </div>
-              <div className="list-items">
-                {projects.map(p => (
-                  <div
-                    key={p.id}
-                    className="list-item"
-                    onClick={() => { setProjectName(p.name); setShowProjectModal(false) }}
-                  >
-                    <span>{p.icon || '📁'}</span>
-                    <span>{p.name}</span>
-                  </div>
-                ))}
-              </div>
+              <button onClick={() => setShowSourceModal(false)} style={{ width: '100%', padding: '16px', background: 'white', borderRadius: 14, border: 'none', fontSize: 18, fontWeight: '600', color: '#007AFF', cursor: 'pointer' }}>
+                取消
+              </button>
             </div>
           </div>
         )
       }
-
-
     </div >
   )
 }

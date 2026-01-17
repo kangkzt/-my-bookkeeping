@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChevronLeft, UploadCloud, DownloadCloud, FileSpreadsheet, FileJson, Check, AlertCircle, Loader2, Cloud, Settings, X } from 'lucide-react'
 import { importData, importCSVData, exportAllData, checkWebDAVConnection, uploadToWebDAV, downloadFromWebDAV } from '../db/sync'
+import Toast from '../components/Toast'
+import ConfirmDialog from '../components/ConfirmDialog'
 import Papa from 'papaparse'
 
 function ImportData() {
@@ -11,7 +13,13 @@ function ImportData() {
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState(null)
   const [importing, setImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState(0)
   const [importMsg, setImportMsg] = useState('')
+
+  const [toast, setToast] = useState(null)
+  const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, title: '', content: '', onConfirm: null })
+
+  const showToast = (message, type = 'info') => setToast({ message, type })
 
   // 云端配置
   const [showCloudSettings, setShowCloudSettings] = useState(false)
@@ -26,15 +34,15 @@ function ImportData() {
     // 验证连接
     if (newConfig.provider === 'dav') {
       if (!newConfig.davUrl || !newConfig.davUser || !newConfig.davPassword) {
-        alert('请填写完整的 WebDAV 配置')
+        showToast('请填写完整的 WebDAV 配置', 'warning')
         return
       }
       try {
         setImportMsg('正在验证连接...')
         await checkWebDAVConnection(newConfig.davUrl, newConfig.davUser, newConfig.davPassword)
-        alert('连接成功！')
+        showToast('连接成功！', 'success')
       } catch (e) {
-        alert('连接失败：' + e.message)
+        showToast('连接失败：' + e.message, 'error')
         return
       } finally {
         setImportMsg('')
@@ -59,7 +67,7 @@ function ImportData() {
   // 云端同步 - 上传
   const handleCloudUpload = async () => {
     if (cloudConfig.provider !== 'dav') {
-      alert('暂仅支持 WebDAV 协议同步，请在设置中配置 WebDAV')
+      showToast('暂只支持 WebDAV 协议同步，请在设置中配置 WebDAV', 'warning')
       setShowCloudSettings(true)
       return
     }
@@ -85,27 +93,39 @@ function ImportData() {
   // 云端同步 - 下载恢复
   const handleCloudDownload = async () => {
     if (cloudConfig.provider !== 'dav') {
-      alert('暂仅支持 WebDAV 协议同步')
+      showToast('暂仅支持 WebDAV 协议同步', 'warning')
       return
     }
-    if (!confirm('从云端恢复将覆盖当前本地数据，是否继续？')) return
 
-    setSyncing(true)
-    setSyncStatus(null)
-    setImportMsg('正在下载...')
-    try {
-      const data = await downloadFromWebDAV(cloudConfig)
-      setImportMsg('正在恢复数据库...')
-      await importData(data)
-      setSyncStatus('success')
-      setImportMsg('数据恢复成功！')
-    } catch (e) {
-      console.error(e)
-      setSyncStatus('error')
-      setImportMsg('下载失败: ' + e.message)
-    } finally {
-      setSyncing(false)
-    }
+    setConfirmDialog({
+      isOpen: true,
+      title: '确认从云端恢复？',
+      content: '这将覆盖当前本地的所有数据！建议您先进行备份。',
+      type: 'danger',
+      confirmText: '覆盖并恢复',
+      onConfirm: async () => {
+        setConfirmDialog(p => ({ ...p, isOpen: false }))
+
+        setSyncing(true)
+        setSyncStatus(null)
+        setImportMsg('正在下载...')
+        try {
+          const data = await downloadFromWebDAV(cloudConfig)
+          setImportMsg('正在恢复数据库...')
+          await importData(data, (p) => { })
+          setSyncStatus('success')
+          showToast('数据恢复成功！', 'success')
+          setImportMsg('数据恢复成功！')
+        } catch (e) {
+          console.error(e)
+          setSyncStatus('error')
+          setImportMsg('下载失败: ' + e.message)
+          showToast('下载失败: ' + e.message, 'error')
+        } finally {
+          setSyncing(false)
+        }
+      }
+    })
   }
 
   const getProviderName = (p) => {
@@ -145,7 +165,7 @@ function ImportData() {
             skipEmptyLines: true,
             complete: async (results) => {
               try {
-                const count = await importCSVData(results.data)
+                const count = await importCSVData(results.data, (p) => setImportProgress(p))
                 setImportMsg(`成功导入 ${count} 条记录`)
                 setTimeout(() => {
                   window.location.href = '/' // Force reload to Home
@@ -160,7 +180,7 @@ function ImportData() {
         } else {
           // JSON
           const data = JSON.parse(text)
-          await importData(data)
+          await importData(data, (p) => setImportProgress(p))
           setImportMsg('JSON 数据恢复成功')
           setImporting(false)
         }
@@ -248,8 +268,13 @@ function ImportData() {
           />
 
           {importing && (
-            <div className="status-tip loading">
-              <Loader2 className="spin" size={14} /> 正在处理...
+            <div className="status-tip loading" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Loader2 className="spin" size={14} /> 正在处理... {importProgress}%
+              </div>
+              <div style={{ width: '100%', height: 4, background: 'rgba(239, 108, 0, 0.1)', borderRadius: 2, overflow: 'hidden' }}>
+                <div style={{ width: `${importProgress}%`, height: '100%', background: '#EF6C00', transition: 'width 0.2s' }} />
+              </div>
             </div>
           )}
           {!importing && importMsg && !syncStatus && (
@@ -452,6 +477,18 @@ function ImportData() {
            width: 100%; padding: 12px; background: #FFB800; color: #fff; border: none; border-radius: 8px; font-size: 16px; margin-top: 8px;
         }
       `}</style>
+
+      {/* Global Toast & Dialog */}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        content={confirmDialog.content}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog(curr => ({ ...curr, isOpen: false }))}
+        type={confirmDialog.type}
+        confirmText={confirmDialog.confirmText}
+      />
     </div>
   )
 }

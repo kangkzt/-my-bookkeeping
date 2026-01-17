@@ -73,7 +73,7 @@ async function hashPassword(password) {
 
 // User Actions
 // User Actions
-export async function registerUser(username, password) {
+export async function registerUser(username, password, avatar = null) {
     const db = await initGlobalDB()
 
     // 1. 先进行密码哈希（耗时操作，必须在数据库操作前完成）
@@ -87,6 +87,7 @@ export async function registerUser(username, password) {
     const user = {
         username,
         password: hashedPassword,
+        avatar: avatar || null,
         created_at: new Date().toISOString()
     }
     const id = await db.add('users', user)

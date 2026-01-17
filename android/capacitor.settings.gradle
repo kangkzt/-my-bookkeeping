@@ -2,6 +2,9 @@
 include ':capacitor-android'
 project(':capacitor-android').projectDir = new File('D:/Users/Administrator/.gemini/antigravity/playground/scarlet-cosmos/node_modules/@capacitor/android/capacitor')
 
+include ':capacitor-community-speech-recognition'
+project(':capacitor-community-speech-recognition').projectDir = new File('D:/Users/Administrator/.gemini/antigravity/playground/scarlet-cosmos/node_modules/@capacitor-community/speech-recognition/android')
+
 include ':capacitor-camera'
 project(':capacitor-camera').projectDir = new File('D:/Users/Administrator/.gemini/antigravity/playground/scarlet-cosmos/node_modules/@capacitor/camera/android')
 

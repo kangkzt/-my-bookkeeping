@@ -15,7 +15,18 @@ export default defineConfig({
       output: {
         entryFileNames: 'assets/[name]-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
-        assetFileNames: 'assets/[name]-[hash].[ext]'
+        assetFileNames: 'assets/[name]-[hash].[ext]',
+        // 代码分割优化 - 减小主包体积
+        manualChunks: {
+          // React 核心库
+          vendor: ['react', 'react-dom', 'react-router-dom'],
+          // 图表库 (较大)
+          charts: ['chart.js', 'react-chartjs-2'],
+          // 数据库 & 工具库
+          db: ['idb', 'papaparse'],
+          // OCR (可延迟加载)
+          ocr: ['tesseract.js']
+        }
       }
     }
   },

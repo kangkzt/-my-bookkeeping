@@ -1,14 +1,14 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { List, BarChart2, Plus, Calendar, Settings } from 'lucide-react'
+import { Home, List, BarChart2, Plus, Settings } from 'lucide-react'
 
 function Navigation() {
     const navigate = useNavigate()
 
     const navItems = [
-        { path: '/', icon: List, label: '流水' },
+        { path: '/', icon: Home, label: '首页' },
+        { path: '/records', icon: List, label: '流水' },
+        { action: 'add', icon: Plus, label: '', isCenter: true },
         { path: '/statistics', icon: BarChart2, label: '报表' },
-        { action: 'add', icon: Plus, label: '记一笔', isCenter: true },
-        { path: '/calendar', icon: Calendar, label: '日历' },
         { path: '/settings', icon: Settings, label: '设置' }
     ]
 

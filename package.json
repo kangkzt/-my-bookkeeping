@@ -1,16 +1,19 @@
 {
   "name": "quick-bookkeeping",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint src --ext .js,.jsx --report-unused-disable-directives --max-warnings 0",
+    "lint:fix": "eslint src --ext .js,.jsx --fix",
+    "format": "prettier --write \"src/**/*.{js,jsx,json,css}\""
   },
   "dependencies": {
-    "ajv": "^8.17.1",
-    "box.js": "^0.2.1",
+    "@capacitor-community/speech-recognition": "^5.0.0",
+    "@supabase/supabase-js": "^2.90.1",
     "chart.js": "^4.4.1",
     "idb": "^8.0.0",
     "lucide-react": "^0.294.0",
@@ -20,8 +23,6 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.20.0",
     "react-swipeable": "^7.0.2",
-    "rxdb": "^16.21.1",
-    "rxjs": "^7.8.2",
     "tesseract.js": "^7.0.0",
     "uuid": "^13.0.0",
     "webdav": "^5.8.0"
@@ -33,6 +34,10 @@
     "@capacitor/core": "^5.7.8",
     "@capacitor/filesystem": "^5.1.4",
     "@vitejs/plugin-react": "^4.2.0",
+    "eslint": "^8.56.0",
+    "eslint-plugin-react": "^7.33.2",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "prettier": "^3.2.0",
     "typescript": "^5.9.3",
     "vite": "^5.0.0"
   }

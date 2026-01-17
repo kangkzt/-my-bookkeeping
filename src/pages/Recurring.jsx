@@ -182,7 +182,7 @@ function Recurring() {
                 .rule-info { flex: 1; display: flex; flex-direction: column; gap: 4px; }
                 .rule-name { font-weight: 500; color: #333; }
                 .rule-desc { font-size: 13px; color: #999; }
-                .delete-btn { color: #ccc; }
+                .delete-btn { color: #ff4d4f; background: none; border: none; padding: 4px; cursor: pointer; }
                 .empty-state { text-align: center; padding: 40px; color: #999; display: flex; flex-direction: column; align-items: center; gap: 16px; }
                 .btn-primary { background: #FFB800; color: #fff; border: none; padding: 10px 24px; border-radius: 20px; }
                 
